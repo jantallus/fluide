@@ -87,40 +87,58 @@ app.put('/api/admin/vols/:id', authenticateAdmin, async (req, res) => {
 
 // --- GÉNÉRATION DYNAMIQUE (BASÉE SUR LA CONFIG) ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
-  const { startDate, endDate, daysToApply } = req.body;
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const monitors = await pool.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
+    const { startDate, endDate, daysToApply } = req.body;
+    const client = await pool.connect();
     
-    // On récupère tes définitions personnalisées (09h25, etc.)
-    const defs = await client.query("SELECT start_time, duration_minutes, label FROM slot_definitions");
-    
-    let current = new Date(startDate);
-    const endLimit = new Date(endDate);
+    try {
+        await client.query('BEGIN');
 
-    while (current <= endLimit) {
-      if (daysToApply.map(Number).includes(current.getDay())) {
-        const dateStr = current.toISOString().split('T')[0];
+        // 1. NETTOYAGE : On supprime les créneaux libres sur la période
+        // On ne touche pas aux réservations (status = 'booked')
+        await client.query(`
+            DELETE FROM slots 
+            WHERE start_time::date >= $1::date 
+            AND start_time::date <= $2::date 
+            AND status = 'available'
+        `, [startDate, endDate]);
+
+        // 2. RÉCUPÉRATION DES PARAMÈTRES
+        const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
+        const defs = await client.query("SELECT start_time, duration_minutes, label FROM slot_definitions ORDER BY start_time ASC");
         
-        for (const mId of monitors.rows.map(m => m.id)) {
-          for (const def of defs.rows) {
-            if (def.label === "PAUSE") continue; // On ne crée pas de créneau pour les pauses
+        let currentDate = new Date(startDate);
+        const lastDate = new Date(endDate);
 
-            const startTS = `${dateStr}T${def.start_time}`;
-            await client.query(
-              "INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING",
-              [startTS, def.duration_minutes, mId]
-            );
-          }
+        // 3. GÉNÉRATION
+        while (currentDate <= lastDate) {
+            const dayOfWeek = currentDate.getDay(); 
+            if (daysToApply.map(Number).includes(dayOfWeek)) {
+                const dateStr = currentDate.toISOString().split('T')[0];
+
+                for (const monitor of monitors.rows) {
+                    for (const def of defs.rows) {
+                        if (def.label === "PAUSE") continue;
+                        const startTS = `${dateStr} ${def.start_time}`;
+                        
+                        await client.query(`
+                            INSERT INTO slots (start_time, end_time, monitor_id, status) 
+                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') 
+                            ON CONFLICT DO NOTHING
+                        `, [startTS, def.duration_minutes, monitor.id]);
+                    }
+                }
+            }
+            currentDate.setDate(currentDate.getDate() + 1);
         }
-      }
-      current.setDate(current.getDate() + 1);
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: "Planning mis à jour" });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
     }
-    await client.query('COMMIT');
-    res.status(201).json({ message: "Génération réussie" });
-  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
-  finally { client.release(); }
 });
 
 // --- TOUTES TES AUTRES ROUTES (PLANNING, BONS CADEAUX, ETC.) ---
