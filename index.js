@@ -102,18 +102,31 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     try {
         await client.query('BEGIN');
         await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
+        
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
         
         let curr = new Date(startDate);
-        while (curr <= new Date(endDate)) {
+        const endLimit = new Date(endDate);
+
+        while (curr <= endLimit) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
-                const dStr = curr.toISOString().split('T')[0];
-                for (const m of monitors.rows) {
-                    for (const d of defs.rows) {
-                        if (d.label === "PAUSE") continue;
-                        const sTS = `${dStr} ${d.start_time}`;
-                        await client.query("INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING", [sTS, d.duration_minutes, m.id]);
+                // Correction décalage : On utilise le format YYYY-MM-DD local
+                const y = curr.getFullYear();
+                const m = String(curr.getMonth() + 1).padStart(2, '0');
+                const d = String(curr.getDate()).padStart(2, '0');
+                const dateStr = `${y}-${m}-${d}`;
+
+                for (const mon of monitors.rows) {
+                    for (const def of defs.rows) {
+                        if (def.label === "PAUSE") continue;
+                        
+                        const startTS = `${dateStr} ${def.start_time}`;
+                        // Calcul de fin basé sur le TS de début + durée
+                        await client.query(
+                            "INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING",
+                            [startTS, def.duration_minutes, mon.id]
+                        );
                     }
                 }
             }
@@ -121,8 +134,10 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
         }
         await client.query('COMMIT');
         res.status(201).json({ message: "OK" });
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
-    finally { client.release(); }
+    } catch (err) { 
+        await client.query('ROLLBACK'); 
+        res.status(500).json({ error: err.message }); 
+    } finally { client.release(); }
 });
 
 // --- UTILITAIRES ---
