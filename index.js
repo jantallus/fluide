@@ -484,30 +484,27 @@ app.put('/api/appointments/:id', async (req, res) => {
     const { id } = req.params;
     const { title, notes, status, monitorId } = req.body;
 
+    console.log("Tentative de mise à jour pour ID:", id, "Data:", req.body);
+
     try {
-        // Cette requête SQL met à jour le titre, les notes, le statut et le moniteur
-        // On utilise COALESCE pour ne pas écraser par du vide si une donnée manque
-        const query = `
-            UPDATE appointments 
-            SET title = $1, 
-                notes = $2, 
-                status = $3, 
-                monitor_id = $4
-            WHERE id = $5
-            RETURNING *;
-        `;
-        
-        const values = [title, notes, status || 'booked', monitorId, id];
-        const result = await db.query(query, values); // Assure-toi que 'db' est le nom de ta connexion SQL dans index.js
+        // ⚠️ VERIFIE ICI : si ta variable s'appelle 'pool', remplace 'db' par 'pool'
+        const result = await db.query(
+            `UPDATE appointments 
+             SET title = $1, notes = $2, status = $3, monitor_id = $4 
+             WHERE id = $5 
+             RETURNING *`,
+            [title, notes, status || 'booked', monitorId || null, id]
+        );
 
         if (result.rows.length > 0) {
+            console.log("Mise à jour réussie !");
             res.json(result.rows[0]);
         } else {
-            res.status(404).json({ error: "Créneau introuvable" });
+            res.status(404).json({ error: "Créneau non trouvé" });
         }
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Erreur serveur lors de la mise à jour" });
+        console.error("ERREUR SQL PRECISE :", err.message); // Regarde ça dans les logs Railway !
+        res.status(500).json({ error: err.message });
     }
 });
 
