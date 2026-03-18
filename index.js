@@ -484,11 +484,9 @@ app.put('/api/appointments/:id', async (req, res) => {
     const { id } = req.params;
     const { title, notes, status, monitorId } = req.body;
 
-    console.log("Tentative de mise à jour pour ID:", id, "Data:", req.body);
-
     try {
-        // ⚠️ VERIFIE ICI : si ta variable s'appelle 'pool', remplace 'db' par 'pool'
-        const result = await db.query(
+        // Utilisation de 'pool' au lieu de 'db'
+        const result = await pool.query( 
             `UPDATE appointments 
              SET title = $1, notes = $2, status = $3, monitor_id = $4 
              WHERE id = $5 
@@ -497,13 +495,12 @@ app.put('/api/appointments/:id', async (req, res) => {
         );
 
         if (result.rows.length > 0) {
-            console.log("Mise à jour réussie !");
             res.json(result.rows[0]);
         } else {
             res.status(404).json({ error: "Créneau non trouvé" });
         }
     } catch (err) {
-        console.error("ERREUR SQL PRECISE :", err.message); // Regarde ça dans les logs Railway !
+        console.error("ERREUR SQL :", err.message);
         res.status(500).json({ error: err.message });
     }
 });
