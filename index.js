@@ -485,10 +485,13 @@ app.put('/api/appointments/:id', async (req, res) => {
     const { title, notes, status, monitorId } = req.body;
 
     try {
-        // Utilisation de 'pool' au lieu de 'db'
-        const result = await pool.query( 
-            `UPDATE appointments 
-             SET title = $1, notes = $2, status = $3, monitor_id = $4 
+        // On cible la table 'slots' (vu dans ton FROM slots s)
+        const result = await pool.query(
+            `UPDATE slots 
+             SET title = $1, 
+                 notes = $2, 
+                 status = $3, 
+                 monitor_id = $4
              WHERE id = $5 
              RETURNING *`,
             [title, notes, status || 'booked', monitorId || null, id]
@@ -497,7 +500,7 @@ app.put('/api/appointments/:id', async (req, res) => {
         if (result.rows.length > 0) {
             res.json(result.rows[0]);
         } else {
-            res.status(404).json({ error: "Créneau non trouvé" });
+            res.status(404).json({ error: "Créneau introuvable dans la table slots" });
         }
     } catch (err) {
         console.error("ERREUR SQL :", err.message);
