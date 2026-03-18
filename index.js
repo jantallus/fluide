@@ -26,39 +26,25 @@ const authenticateAdmin = (req, res, next) => {
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- ROUTES PLANNING ---
-
 app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT id::text, monitor_id as "resourceId", title, notes, 
-             start_time as start, end_time as end, status
-      FROM slots ORDER BY start_time ASC
-    `);
+    const result = await pool.query(`SELECT id::text, monitor_id as "resourceId", title, notes, start_time as start, end_time as end, status FROM slots ORDER BY start_time ASC`);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// MISE À JOUR UNIVERSELLE (Modification / Réservation / Blocage)
 app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
   const { title, notes, monitor_id, start_time, end_time, status } = req.body;
   try {
-    await pool.query(
-      `UPDATE slots SET title = $1, notes = $2, monitor_id = $3, start_time = $4, end_time = $5, status = $6 WHERE id = $7`,
-      [title, notes, monitor_id, start_time, end_time, status, req.params.id]
-    );
+    await pool.query(`UPDATE slots SET title = $1, notes = $2, monitor_id = $3, start_time = $4, end_time = $5, status = $6 WHERE id = $7`, [title, notes, monitor_id, start_time, end_time, status, req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// BLOCAGE GROUPE (MÉTÉO) - Ne supprime rien, change le statut de tous les moniteurs à cette heure
 app.post('/api/admin/appointments/block-all', authenticateAdmin, async (req, res) => {
   const { start_time, notes } = req.body;
   try {
-    await pool.query(
-      `UPDATE slots SET status = 'booked', title = '🚫 BLOQUÉ (TOUS)', notes = $1 WHERE start_time = $2`,
-      [notes, start_time]
-    );
+    await pool.query(`UPDATE slots SET status = 'booked', title = '🚫 BLOQUÉ (TOUS)', notes = $1 WHERE start_time = $2`, [notes, start_time]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -70,63 +56,27 @@ app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- GÉNÉRATION LOGISTIQUE ---
-
-app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    try {
-        const result = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
-        res.json(result.rows);
-    } catch (err) { res.json([]); }
-});
-
-app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    const { start_time, duration_minutes, label } = req.body;
-    try {
-        await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3)", 
-            [start_time, duration_minutes, label]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
-    try {
-        await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- GÉNÉRATION DE PLANNING ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
-        
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
         
         let curr = new Date(startDate);
-        const endLimit = new Date(endDate);
-
-        while (curr <= endLimit) {
+        while (curr <= new Date(endDate)) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
-                // Correction décalage : On utilise le format YYYY-MM-DD local
                 const y = curr.getFullYear();
                 const m = String(curr.getMonth() + 1).padStart(2, '0');
                 const d = String(curr.getDate()).padStart(2, '0');
                 const dateStr = `${y}-${m}-${d}`;
-
+                
                 for (const mon of monitors.rows) {
                     for (const def of defs.rows) {
-                        if (def.label === "PAUSE") continue;
-                        
                         const startTS = `${dateStr} ${def.start_time}`;
-                        // Calcul de fin basé sur le TS de début + durée
-                        await client.query(
-                            "INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING",
-                            [startTS, def.duration_minutes, mon.id]
-                        );
+                        await client.query("INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING", [startTS, def.duration_minutes, mon.id]);
                     }
                 }
             }
@@ -134,13 +84,10 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
         }
         await client.query('COMMIT');
         res.status(201).json({ message: "OK" });
-    } catch (err) { 
-        await client.query('ROLLBACK'); 
-        res.status(500).json({ error: err.message }); 
-    } finally { client.release(); }
+    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
+    finally { client.release(); }
 });
 
-// --- UTILITAIRES ---
 app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
     const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
     res.json(result.rows);
