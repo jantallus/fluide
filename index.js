@@ -39,7 +39,7 @@ app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ROUTE UNIVERSELLE (Réservation / Déplacement / Blocage individuel)
+// MISE À JOUR UNIVERSELLE (Modification / Réservation / Blocage)
 app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
   const { title, notes, monitor_id, start_time, end_time, status } = req.body;
   try {
@@ -51,7 +51,7 @@ app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// BLOCAGE GROUPE (MÉTÉO)
+// BLOCAGE GROUPE (MÉTÉO) - Ne supprime rien, change le statut de tous les moniteurs à cette heure
 app.post('/api/admin/appointments/block-all', authenticateAdmin, async (req, res) => {
   const { start_time, notes } = req.body;
   try {
@@ -70,7 +70,32 @@ app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- GÉNÉRATION ---
+// --- GÉNÉRATION LOGISTIQUE ---
+
+app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
+        res.json(result.rows);
+    } catch (err) { res.json([]); }
+});
+
+app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+    const { start_time, duration_minutes, label } = req.body;
+    try {
+        await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3)", 
+            [start_time, duration_minutes, label]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
+    try {
+        await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- GÉNÉRATION DE PLANNING ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
@@ -100,9 +125,10 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     finally { client.release(); }
 });
 
+// --- UTILITAIRES ---
 app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
-  const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
-  res.json(result.rows);
+    const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
+    res.json(result.rows);
 });
 
 app.get('/api/monitors', authenticateAdmin, async (req, res) => {
