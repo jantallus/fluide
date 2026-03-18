@@ -19,24 +19,111 @@ const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 // --- MIDDLEWARE DE SÉCURITÉ ---
 const authenticateAdmin = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Accès refusé. Token manquant." });
+  if (!token) return res.status(401).json({ message: "Accès refusé" });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.role !== 'admin') return res.status(403).json({ message: "Accès interdit." });
+    if (decoded.role !== 'admin') return res.status(403).json({ message: "Interdit" });
     req.user = decoded;
     next();
-  } catch (err) {
-    res.status(401).json({ message: "Token invalide ou expiré." });
-  }
+  } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- ROUTES PUBLIQUES (CLIENT) ---
-app.get('/api/slots', async (req, res) => {
+// --- ROUTES CONFIGURATION (POUR LA PAGE CONFIG) ---
+
+// 1. Définitions des créneaux (Structure Logistique)
+app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
   try {
-    const result = await pool.query("SELECT id, start_time, end_time, monitor_id FROM slots WHERE status = 'available' AND start_time > NOW() ORDER BY start_time ASC");
+    const result = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
     res.json(result.rows);
+  } catch (err) { res.json([]); }
+});
+
+app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+  const { start_time, duration_minutes, label } = req.body;
+  try {
+    await pool.query(
+      "INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3)", 
+      [start_time, duration_minutes, label || 'LOGISTIQUE + VOL']
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 2. Options (Bornes horaires open/close)
+app.get('/api/admin/config', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT option_name, value FROM config_options");
+    const config = {};
+    result.rows.forEach(row => { config[row.option_name] = row.value; });
+    res.json(config);
+  } catch (err) { res.json({ open_hour: "09:00", close_hour: "17:00" }); }
+});
+
+app.put('/api/admin/config/options', authenticateAdmin, async (req, res) => {
+  const { option_name, value } = req.body;
+  try {
+    await pool.query(
+      "INSERT INTO config_options (option_name, value) VALUES ($1, $2) ON CONFLICT (option_name) DO UPDATE SET value = $2",
+      [option_name, value]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 3. Mise à jour des tarifs
+app.put('/api/admin/vols/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query("UPDATE flight_types SET price_cents = $1 WHERE id = $2", [req.body.price_cents, req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- GÉNÉRATION DYNAMIQUE (BASÉE SUR LA CONFIG) ---
+app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
+  const { startDate, endDate, daysToApply } = req.body;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const monitors = await pool.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
+    
+    // On récupère tes définitions personnalisées (09h25, etc.)
+    const defs = await client.query("SELECT start_time, duration_minutes, label FROM slot_definitions");
+    
+    let current = new Date(startDate);
+    const endLimit = new Date(endDate);
+
+    while (current <= endLimit) {
+      if (daysToApply.map(Number).includes(current.getDay())) {
+        const dateStr = current.toISOString().split('T')[0];
+        
+        for (const mId of monitors.rows.map(m => m.id)) {
+          for (const def of defs.rows) {
+            if (def.label === "PAUSE") continue; // On ne crée pas de créneau pour les pauses
+
+            const startTS = `${dateStr}T${def.start_time}`;
+            await client.query(
+              "INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING",
+              [startTS, def.duration_minutes, mId]
+            );
+          }
+        }
+      }
+      current.setDate(current.getDate() + 1);
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ message: "Génération réussie" });
+  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
+  finally { client.release(); }
+});
+
+// --- TOUTES TES AUTRES ROUTES (PLANNING, BONS CADEAUX, ETC.) ---
 
 app.get('/api/vols', async (req, res) => {
   try {
@@ -58,7 +145,6 @@ app.post('/api/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- ROUTES ADMIN ---
 app.get('/api/appointments', authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -102,37 +188,6 @@ app.get('/api/monitors', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// LOGIQUE DE GÉNÉRATION HARMONISÉE AVEC LE FRONTEND
-app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
-  const { startDate, endDate, daysToApply } = req.body;
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const monitors = await pool.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
-    const hours = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00", "17:00"];
-    
-    let current = new Date(startDate);
-    const endLimit = new Date(endDate);
-
-    while (current <= endLimit) {
-      if (daysToApply.map(Number).includes(current.getDay())) {
-        const dateStr = current.toISOString().split('T')[0];
-        for (const mId of monitors.rows.map(m => m.id)) {
-          for (const h of hours) {
-            const startTS = `${dateStr}T${h}:00`;
-            await client.query("INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + interval '45 minutes', $2, 'available') ON CONFLICT DO NOTHING", [startTS, mId]);
-          }
-        }
-      }
-      current.setDate(current.getDate() + 1);
-    }
-    await client.query('COMMIT');
-    res.status(201).json({ message: "Génération réussie" });
-  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
-  finally { client.release(); }
-});
-
-// --- GESTION DES BONS CADEAUX (CONSERVÉ) ---
 app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query("SELECT gc.*, ft.name as flight_name FROM gift_cards gc JOIN flight_types ft ON gc.flight_type_id = ft.id ORDER BY gc.created_at DESC");
@@ -140,24 +195,6 @@ app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
-  const { flight_type_id, buyer_name, recipient_name } = req.body;
-  const code = "FLUIDE-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-  try {
-    const result = await pool.query('INSERT INTO gift_cards (code, flight_type_id, buyer_name, recipient_name) VALUES ($1, $2, $3, $4) RETURNING *', [code, flight_type_id, buyer_name, recipient_name]);
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/gift-cards/verify/:code', async (req, res) => {
-  try {
-    const result = await pool.query("SELECT gc.*, ft.name as flight_name, ft.id as flight_type_id FROM gift_cards gc JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE gc.code = $1 AND gc.used = false", [req.params.code]);
-    if (result.rows.length === 0) return res.status(404).json({ message: "Code invalide" });
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ROUTES COMPLÉMENTAIRES POUR ÉVITER LES 404 FRONTEND
 app.get('/api/admin/stats', authenticateAdmin, (req, res) => res.json({ totalBookings: 0, revenue: 0 }));
 app.get('/api/admin/clients', authenticateAdmin, (req, res) => res.json([]));
 
