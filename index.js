@@ -39,13 +39,25 @@ app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ROUTE UNIVERSELLE : Remplace l'ancienne route /book
+// ROUTE UNIVERSELLE (Réservation / Déplacement / Blocage individuel)
 app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
   const { title, notes, monitor_id, start_time, end_time, status } = req.body;
   try {
     await pool.query(
       `UPDATE slots SET title = $1, notes = $2, monitor_id = $3, start_time = $4, end_time = $5, status = $6 WHERE id = $7`,
       [title, notes, monitor_id, start_time, end_time, status, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// BLOCAGE GROUPE (MÉTÉO)
+app.post('/api/admin/appointments/block-all', authenticateAdmin, async (req, res) => {
+  const { start_time, notes } = req.body;
+  try {
+    await pool.query(
+      `UPDATE slots SET status = 'booked', title = '🚫 BLOQUÉ (TOUS)', notes = $1 WHERE start_time = $2`,
+      [notes, start_time]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -88,17 +100,9 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     finally { client.release(); }
 });
 
-// --- CONFIG & PILOTES ---
-app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    const r = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
-    res.json(r.rows);
-});
-
 app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
+  res.json(result.rows);
 });
 
 app.get('/api/monitors', authenticateAdmin, async (req, res) => {
