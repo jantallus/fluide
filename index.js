@@ -39,12 +39,16 @@ app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/admin/appointments/:id/book', authenticateAdmin, async (req, res) => {
-    const { name, phone } = req.body;
-    try {
-        await pool.query("UPDATE slots SET status = 'booked', title = $1, notes = $2 WHERE id = $3", [name, phone, req.params.id]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+// ROUTE UNIVERSELLE : Remplace l'ancienne route /book
+app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
+  const { title, notes, monitor_id, start_time, end_time, status } = req.body;
+  try {
+    await pool.query(
+      `UPDATE slots SET title = $1, notes = $2, monitor_id = $3, start_time = $4, end_time = $5, status = $6 WHERE id = $7`,
+      [title, notes, monitor_id, start_time, end_time, status, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, res) => {
@@ -84,16 +88,17 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     finally { client.release(); }
 });
 
-// --- CONFIG & USERS ---
+// --- CONFIG & PILOTES ---
 app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
     const r = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
     res.json(r.rows);
 });
 
-app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    const { start_time, duration_minutes, label } = req.body;
-    await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1,$2,$3)", [start_time, duration_minutes, label]);
-    res.json({ success: true });
+app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/monitors', authenticateAdmin, async (req, res) => {
