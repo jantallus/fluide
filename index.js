@@ -26,51 +26,8 @@ const authenticateAdmin = (req, res, next) => {
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- ROUTES CONFIGURATION ---
+// --- LECTURE ET RÉSERVATION ---
 
-app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
-    res.json(result.rows);
-  } catch (err) { res.json([]); }
-});
-
-app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-  const { start_time, duration_minutes, label } = req.body;
-  try {
-    await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3)", 
-      [start_time, duration_minutes, label || 'LOGISTIQUE + VOL']);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
-  try {
-    await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/admin/config', authenticateAdmin, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT option_name, value FROM config_options");
-    const config = {};
-    result.rows.forEach(row => { config[row.option_name] = row.value; });
-    res.json(config);
-  } catch (err) { res.json({ open_hour: "09:25", close_hour: "16:35" }); }
-});
-
-app.put('/api/admin/config/options', authenticateAdmin, async (req, res) => {
-  const { option_name, value } = req.body;
-  try {
-    await pool.query("INSERT INTO config_options (option_name, value) VALUES ($1, $2) ON CONFLICT (option_name) DO UPDATE SET value = $2", [option_name, value]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- LECTURE ET GÉNÉRATION DU PLANNING ---
-
-// Route pour lire les créneaux (Utilisée par le calendrier)
 app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -78,16 +35,29 @@ app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
         id::text, 
         monitor_id as "resourceId", 
         title, 
+        notes, 
         start_time as start, 
         end_time as end, 
-        status, 
-        notes 
+        status
       FROM slots 
       ORDER BY start_time ASC
     `);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+app.put('/api/admin/appointments/:id/book', authenticateAdmin, async (req, res) => {
+    const { name, phone } = req.body;
+    try {
+        await pool.query(
+            "UPDATE slots SET status = 'booked', title = $1, notes = $2 WHERE id = $3",
+            [name, phone, req.params.id]
+        );
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- GÉNÉRATION ---
 
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
@@ -121,14 +91,37 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
 
 // --- AUTRES ROUTES ---
 
+app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
+    res.json(result.rows);
+  } catch (err) { res.json([]); }
+});
+
+app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+  const { start_time, duration_minutes, label } = req.body;
+  try {
+    await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3)", 
+      [start_time, duration_minutes, label || 'LOGISTIQUE + VOL']);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (result.rows.length === 0) return res.status(401).json({ message: "Identifiants invalides" });
+    if (result.rows.length === 0) return res.status(401).json({ message: "Invalide" });
     const user = result.rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return res.status(401).json({ message: "Identifiants invalides" });
+    if (!match) return res.status(401).json({ message: "Invalide" });
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
     res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -141,12 +134,5 @@ app.get('/api/monitors', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/vols', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM flight_types ORDER BY price_cents ASC');
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Serveur prêt sur port ${PORT}`));
+app.listen(PORT, () => console.log(`Serveur sur ${PORT}`));
