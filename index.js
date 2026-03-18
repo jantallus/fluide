@@ -26,14 +26,14 @@ const authenticateAdmin = (req, res, next) => {
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- LECTURE ET RÉSERVATION ---
+// --- ROUTES RÉSERVATION ET LECTURE ---
 
 app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        id::text, 
-        monitor_id as "resourceId", 
+        id::text as id, 
+        monitor_id::text as "resourceId", 
         title, 
         notes, 
         start_time as start, 
@@ -89,7 +89,7 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     finally { client.release(); }
 });
 
-// --- AUTRES ROUTES ---
+// --- ROUTES CONFIGURATION ---
 
 app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
   try {
