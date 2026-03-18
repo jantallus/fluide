@@ -26,6 +26,7 @@ const authenticateAdmin = (req, res, next) => {
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
+// --- PLANNING ROUTES ---
 app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   try {
     const result = await pool.query(`SELECT id::text, monitor_id as "resourceId", title, notes, start_time as start, end_time as end, status FROM slots ORDER BY start_time ASC`);
@@ -56,47 +57,35 @@ app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- DANS index.js : REMPLACE LA ROUTE GENERATE ---
+// --- GENERATION (SANS DÉCALAGE + ANTI-COLLISION) ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // On ne nettoie que les 'available'. Les pauses (BLOQUÉ) restent.
         await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
-        
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
         
         let curr = new Date(startDate);
-        const endLimit = new Date(endDate);
-
-        while (curr <= endLimit) {
+        while (curr <= new Date(endDate)) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
                 const y = curr.getFullYear();
                 const m = String(curr.getMonth() + 1).padStart(2, '0');
                 const d = String(curr.getDate()).padStart(2, '0');
                 const dateStr = `${y}-${m}-${d}`;
-
+                
                 for (const mon of monitors.rows) {
                     for (const def of defs.rows) {
-                        // LA PROTECTION ANTI-COLLISION :
-                        // Si le label est PAUSE, on l'insère en tant que BLOQUÉ immédiatement
                         const startTS = `${dateStr} ${def.start_time}`;
                         const isPause = def.label === "PAUSE";
-                        
-                        await client.query(
-                            `INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
-                             VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
-                             ON CONFLICT (start_time, monitor_id) DO UPDATE 
-                             SET status = EXCLUDED.status, title = EXCLUDED.title`,
-                            [
-                                startTS, 
-                                def.duration_minutes, 
-                                mon.id, 
-                                isPause ? 'booked' : 'available', 
-                                isPause ? '☕ PAUSE' : null
-                            ]
+                        // ON CONFLICT DO UPDATE pour éviter les doublons 14:25
+                        await client.query(`
+                            INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
+                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
+                            ON CONFLICT (start_time, monitor_id) DO UPDATE 
+                            SET status = EXCLUDED.status, title = EXCLUDED.title`,
+                            [startTS, def.duration_minutes, mon.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
                         );
                     }
                 }
@@ -107,6 +96,29 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
         res.status(201).json({ message: "OK" });
     } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
     finally { client.release(); }
+});
+
+// --- CONFIG ROUTES ---
+app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+    try {
+        const r = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
+        res.json(r.rows);
+    } catch (err) { res.json([]); }
+});
+
+app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
+    const { start_time, duration_minutes, label } = req.body;
+    try {
+        await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1,$2,$3)", [start_time, duration_minutes, label]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
+    try {
+        await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
