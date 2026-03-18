@@ -56,27 +56,48 @@ app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- DANS index.js : REMPLACE LA ROUTE GENERATE ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        // On ne nettoie que les 'available'. Les pauses (BLOQUÉ) restent.
         await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
+        
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
         
         let curr = new Date(startDate);
-        while (curr <= new Date(endDate)) {
+        const endLimit = new Date(endDate);
+
+        while (curr <= endLimit) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
                 const y = curr.getFullYear();
                 const m = String(curr.getMonth() + 1).padStart(2, '0');
                 const d = String(curr.getDate()).padStart(2, '0');
                 const dateStr = `${y}-${m}-${d}`;
-                
+
                 for (const mon of monitors.rows) {
                     for (const def of defs.rows) {
+                        // LA PROTECTION ANTI-COLLISION :
+                        // Si le label est PAUSE, on l'insère en tant que BLOQUÉ immédiatement
                         const startTS = `${dateStr} ${def.start_time}`;
-                        await client.query("INSERT INTO slots (start_time, end_time, monitor_id, status) VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, 'available') ON CONFLICT DO NOTHING", [startTS, def.duration_minutes, mon.id]);
+                        const isPause = def.label === "PAUSE";
+                        
+                        await client.query(
+                            `INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
+                             VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
+                             ON CONFLICT (start_time, monitor_id) DO UPDATE 
+                             SET status = EXCLUDED.status, title = EXCLUDED.title`,
+                            [
+                                startTS, 
+                                def.duration_minutes, 
+                                mon.id, 
+                                isPause ? 'booked' : 'available', 
+                                isPause ? '☕ PAUSE' : null
+                            ]
+                        );
                     }
                 }
             }
