@@ -39,12 +39,13 @@ app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// MISE À JOUR : On change le CONTENU (titre/notes) mais on ne DELETE jamais la ligne
 app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, monitor_id, start_time, end_time, status } = req.body;
+  const { title, notes, status, monitor_id } = req.body;
   try {
     await pool.query(
-      `UPDATE slots SET title = $1, notes = $2, monitor_id = $3, start_time = $4, end_time = $5, status = $6 WHERE id = $7`,
-      [title, notes, monitor_id, start_time, end_time, status, req.params.id]
+      `UPDATE slots SET title = $1, notes = $2, status = $3, monitor_id = $4 WHERE id = $5`,
+      [title, notes, status, monitor_id, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -68,14 +69,13 @@ app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- GÉNÉRATION (SANS DÉCALAGE + ANTI-CHEVAUCHEMENT) ---
+// --- GÉNÉRATION : ANTI-COLLISION 14:15/14:25 ---
 app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
-        // 1. Nettoyage strict : On ne touche PAS aux créneaux déjà réservés (booked)
+        // On ne vide que les créneaux Libres pour ne pas écraser les réservations manuelles
         await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
         
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
@@ -86,7 +86,6 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
 
         while (curr <= limit) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
-                // Construction de la date manuelle pour éviter le décalage UTC
                 const dateStr = curr.getFullYear() + '-' + String(curr.getMonth() + 1).padStart(2, '0') + '-' + String(curr.getDate()).padStart(2, '0');
 
                 for (const m of monitors.rows) {
@@ -94,7 +93,7 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
                         const startTS = `${dateStr} ${d.start_time}`;
                         const isPause = d.label === "PAUSE";
                         
-                        // ON CONFLICT DO NOTHING : Si un créneau (ex: Pause ou Réservé) existe déjà à cette seconde pile, on n'écrase pas.
+                        // ON CONFLICT DO NOTHING : Crucial pour éviter le conflit si une pause finit à l'heure exacte où un vol commence
                         await client.query(`
                             INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
                             VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
@@ -112,7 +111,6 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     finally { client.release(); }
 });
 
-// --- ROUTES CONFIG ---
 app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
     const r = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
     res.json(r.rows);
