@@ -75,36 +75,31 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // Nettoyage des créneaux libres uniquement
-        await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
+        
+        // Nettoyage de la période
+        await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2", [startDate, endDate]);
         
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
         
         let curr = new Date(startDate);
-        const limit = new Date(endDate);
-
-        while (curr <= limit) {
+        while (curr <= new Date(endDate)) {
             if (daysToApply.map(Number).includes(curr.getDay())) {
-                const y = curr.getFullYear();
-                const m = String(curr.getMonth() + 1).padStart(2, '0');
-                const d = String(curr.getDate()).padStart(2, '0');
-                const dateStr = `${y}-${m}-${d}`;
+                // FORCE le format local YYYY-MM-DD
+                const dateStr = curr.getFullYear() + '-' + String(curr.getMonth() + 1).padStart(2, '0') + '-' + String(curr.getDate()).padStart(2, '0');
 
-                for (const mon of monitors.rows) {
-                    for (const def of defs.rows) {
-                        const startTS = `${dateStr} ${def.start_time}`;
-                        const isPause = def.label === "PAUSE";
-                        
-                        // Sécurité 14:25 : Si c'est une pause, on réduit de 1 seconde la fin 
-                        // pour ne pas toucher le créneau suivant
-                        const durationStr = isPause ? (def.duration_minutes - 0.01) : def.duration_minutes;
+                for (const m of monitors.rows) {
+                    for (const d of defs.rows) {
+                        const startTS = `${dateStr} ${d.start_time}`;
+                        const isPause = d.label === "PAUSE";
+                        // Retrait d'une seconde sur la pause pour éviter le conflit 14:25
+                        const duration = isPause ? (d.duration_minutes - 0.01) : d.duration_minutes;
 
                         await client.query(`
                             INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
-                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
+                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5)
                             ON CONFLICT (start_time, monitor_id) DO NOTHING`,
-                            [startTS, durationStr, mon.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
+                            [startTS, duration, m.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
                         );
                     }
                 }
