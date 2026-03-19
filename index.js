@@ -76,7 +76,15 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
     try {
         await client.query('BEGIN');
         // On ne vide que les créneaux Libres pour ne pas écraser les réservations manuelles
-        await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
+        await client.query(`
+    INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
+    VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
+    ON CONFLICT (start_time, monitor_id) 
+    DO UPDATE SET 
+        end_time = EXCLUDED.end_time,
+        status = CASE WHEN slots.status = 'booked' AND slots.title != '☕ PAUSE' THEN slots.status ELSE EXCLUDED.status END,
+        title = CASE WHEN slots.status = 'booked' AND slots.title != '☕ PAUSE' THEN slots.title ELSE EXCLUDED.title END
+`, [startTS, def.duration_minutes, mon.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
         
         const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
         const defs = await client.query("SELECT * FROM slot_definitions");
