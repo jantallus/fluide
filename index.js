@@ -143,6 +143,15 @@ app.get('/api/monitors', authenticateAdmin, async (req, res) => {
     res.json(r.rows);
 });
 
+app.get('/api/vols', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     const r = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
