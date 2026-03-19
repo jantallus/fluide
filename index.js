@@ -1,4 +1,3 @@
-// --- REMPLACEZ TOUT VOTRE index.js PAR CE CODE ---
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -9,6 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- CONFIGURATION BASE DE DONNÉES (Adapté Railway) ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgresql://postgres:fuQIzafUNCSMkwiUNeWZKSoMHwfXutDC@yamanote.proxy.rlwy.net:35258/railway",
   ssl: { rejectUnauthorized: false }
@@ -16,6 +16,7 @@ const pool = new Pool({
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
+// --- MIDDLEWARE DE SÉCURITÉ ---
 const authenticateAdmin = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: "Accès refusé" });
@@ -27,138 +28,93 @@ const authenticateAdmin = (req, res, next) => {
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- ROUTES PLANNING ---
+// --- ROUTES ---
 
-app.get('/api/admin/appointments', authenticateAdmin, async (req, res) => {
+app.get('/api/vols', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM flight_types ORDER BY price_cents ASC');
+    res.json(result.rows);
+  } catch (err) { res.status(500).send(err.message); }
+});
+
+app.get('/api/monitors', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, first_name FROM users WHERE role IN ('monitor', 'admin') AND status = 'Actif'");
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/appointments', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT id::text, monitor_id as "resourceId", title, notes, 
-             start_time as start, end_time as end, status
-      FROM slots ORDER BY start_time ASC
+      SELECT 
+        s.id::text as id, 
+        s.monitor_id as "resourceId", 
+        s.title, 
+        s.start_time as start, 
+        s.end_time as end,
+        s.notes,
+        s.status
+      FROM slots s ORDER BY s.start_time ASC
     `);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/admin/appointments/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, monitor_id } = req.body;
-  try {
-    await pool.query(
-      `UPDATE slots SET title = $1, notes = $2, status = $3, monitor_id = $4 WHERE id = $5`,
-      [title, notes, status, monitor_id, req.params.id]
-    );
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/admin/appointments/block-all', authenticateAdmin, async (req, res) => {
-  const { start_time, notes } = req.body;
-  try {
-    await pool.query(
-      `UPDATE slots SET status = 'booked', title = '🚫 BLOQUÉ (TOUS)', notes = $1 WHERE start_time = $2`,
-      [notes, start_time]
-    );
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/admin/appointments/:id/cancel', authenticateAdmin, async (req, res) => {
-    try {
-        await pool.query("UPDATE slots SET status = 'available', title = NULL, notes = NULL WHERE id = $1", [req.params.id]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- GÉNÉRATEUR AVEC ANTI-COLLISION ---
-app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res) => {
+app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
     const { startDate, endDate, daysToApply } = req.body;
     const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-        // Nettoyage de sécurité
-        await client.query("DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'available'", [startDate, endDate]);
-        
-        const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin')");
-        const defs = await client.query("SELECT * FROM slot_definitions");
-        
-        let curr = new Date(startDate);
-        const limit = new Date(endDate);
-
-        while (curr <= limit) {
-            if (daysToApply.map(Number).includes(curr.getDay())) {
-                // FORMATAGE MANUEL : Bloque le décalage horaire
-                const y = curr.getFullYear();
-                const m = String(curr.getMonth() + 1).padStart(2, '0');
-                const d = String(curr.getDate()).padStart(2, '0');
-                const dateStr = `${y}-${m}-${d}`;
-
-                for (const mon of monitors.rows) {
-                    for (const def of defs.rows) {
-                        const startTS = `${dateStr} ${def.start_time}`;
-                        const isPause = def.label === "PAUSE";
-                        
-                        // ANTI-CHEVauchement 14:25 : La pause finit 1 seconde plus tôt
-                        const duration = isPause ? (def.duration_minutes - 0.01) : def.duration_minutes;
-
-                        await client.query(`
-                            INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
-                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
-                            ON CONFLICT (start_time, monitor_id) DO NOTHING`,
-                            [startTS, duration, mon.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
-                        );
-                    }
-                }
+      await client.query('BEGIN');
+      const definitions = await client.query('SELECT * FROM slot_definitions');
+      const monitors = await client.query("SELECT id FROM users WHERE role IN ('monitor', 'admin') AND status = 'Actif'");
+      
+      let currentDate = new Date(startDate);
+      const lastDate = new Date(endDate);
+  
+      while (currentDate <= lastDate) {
+        if (daysToApply.map(Number).includes(currentDate.getDay())) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          for (const def of definitions.rows) {
+            for (const mon of monitors.rows) {
+              const startStr = `${dateStr} ${def.start_time}`;
+              await client.query(`
+                INSERT INTO slots (monitor_id, start_time, end_time, status) 
+                VALUES ($1, $2, $2::timestamp + ($3 || ' minutes')::interval, 'available')
+                ON CONFLICT (monitor_id, start_time) DO UPDATE SET end_time = EXCLUDED.end_time
+              `, [mon.id, startStr, def.duration_minutes]);
             }
-            curr.setDate(curr.getDate() + 1);
+          }
         }
-        await client.query('COMMIT');
-        res.status(201).json({ message: "OK" });
-    } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
-    finally { client.release(); }
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+      await client.query('COMMIT');
+      res.json({ success: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: err.message });
+    } finally { client.release(); }
 });
 
-app.get('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    const r = await pool.query("SELECT * FROM slot_definitions ORDER BY start_time ASC");
-    res.json(r.rows);
-});
-
-app.post('/api/admin/config/slots-definitions', authenticateAdmin, async (req, res) => {
-    const { start_time, duration_minutes, label } = req.body;
-    await pool.query("INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1,$2,$3)", [start_time, duration_minutes, label]);
-    res.json({ success: true });
-});
-
-app.delete('/api/admin/config/slots-definitions/:id', authenticateAdmin, async (req, res) => {
-    await pool.query("DELETE FROM slot_definitions WHERE id = $1", [req.params.id]);
-    res.json({ success: true });
-});
-
-app.get('/api/admin/flight-types', authenticateAdmin, async (req, res) => {
-    const r = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
-    res.json(r.rows);
-});
-
-app.get('/api/monitors', authenticateAdmin, async (req, res) => {
-    const r = await pool.query("SELECT id, first_name FROM users WHERE role IN ('monitor', 'admin')");
-    res.json(r.rows);
-});
-
-app.get('/api/vols', authenticateAdmin, async (req, res) => {
+app.put('/api/appointments/:id', authenticateAdmin, async (req, res) => {
+  const { monitorId, title, status, notes } = req.body;
   try {
-    const result = await pool.query("SELECT * FROM flight_types ORDER BY id ASC");
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    await pool.query(
+      `UPDATE slots SET monitor_id = COALESCE($1, monitor_id), title = $2, status = $3, notes = $4 WHERE id = $5`,
+      [monitorId, title, status, notes, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    const r = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    if (r.rows[0] && await bcrypt.compare(password, r.rows[0].password_hash)) {
-        const token = jwt.sign({ id: r.rows[0].id, role: r.rows[0].role }, JWT_SECRET);
-        res.json({ token, user: { email, role: r.rows[0].role } });
-    } else res.status(401).json({ message: "Erreur" });
+  const { email, password } = req.body;
+  const r = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+  if (r.rows[0] && await bcrypt.compare(password, r.rows[0].password_hash)) {
+    const token = jwt.sign({ id: r.rows[0].id, role: r.rows[0].role }, JWT_SECRET);
+    res.json({ token, user: { id: r.rows[0].id, role: r.rows[0].role } });
+  } else res.status(401).json({ message: "Erreur" });
 });
 
-app.listen(process.env.PORT || 3001);
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => { console.log(`✅ Backend sur port ${PORT}`); });
