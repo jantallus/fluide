@@ -85,26 +85,31 @@ app.post('/api/admin/appointments/generate', authenticateAdmin, async (req, res)
         const limit = new Date(endDate);
 
         while (curr <= limit) {
-            if (daysToApply.map(Number).includes(curr.getDay())) {
-                const dateStr = curr.getFullYear() + '-' + String(curr.getMonth() + 1).padStart(2, '0') + '-' + String(curr.getDate()).padStart(2, '0');
+    if (daysToApply.map(Number).includes(curr.getDay())) {
+        // Formatage manuel strict YYYY-MM-DD
+        const dateStr = curr.getFullYear() + '-' + 
+              String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
+              String(curr.getDate()).padStart(2, '0');
 
-                for (const m of monitors.rows) {
-                    for (const d of defs.rows) {
-                        const startTS = `${dateStr} ${d.start_time}`;
-                        const isPause = d.label === "PAUSE";
-                        
-                        // ON CONFLICT DO NOTHING : Crucial pour éviter le conflit si une pause finit à l'heure exacte où un vol commence
-                        await client.query(`
-                            INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
-                            VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
-                            ON CONFLICT (start_time, monitor_id) DO NOTHING`,
-                            [startTS, d.duration_minutes, m.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
-                        );
-                    }
-                }
+        for (const m of monitors.rows) {
+            for (const d of defs.rows) {
+                const startTS = `${dateStr} ${d.start_time}`;
+                const isPause = d.label === "PAUSE";
+                
+                // Utilisation de ON CONFLICT DO UPDATE pour FORCER la mise à jour 
+                // même si le créneau existe déjà
+                await client.query(`
+                    INSERT INTO slots (start_time, end_time, monitor_id, status, title) 
+                    VALUES ($1, $1::timestamp + ($2 || ' minutes')::interval, $3, $4, $5) 
+                    ON CONFLICT (start_time, monitor_id) 
+                    DO UPDATE SET end_time = EXCLUDED.end_time, status = EXCLUDED.status, title = EXCLUDED.title`,
+                    [startTS, d.duration_minutes, m.id, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]
+                );
             }
-            curr.setDate(curr.getDate() + 1);
         }
+    }
+    curr.setDate(curr.getDate() + 1);
+}
         await client.query('COMMIT');
         res.status(201).json({ message: "OK" });
     } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
