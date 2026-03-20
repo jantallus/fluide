@@ -144,6 +144,21 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Modifier une prestation existante
+app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code } = req.body;
+  try {
+    await pool.query(
+      `UPDATE flight_types 
+       SET name = $1, duration_minutes = $2, price_cents = $3, 
+           restricted_start_time = $4, restricted_end_time = $5, color_code = $6 
+       WHERE id = $7`,
+      [name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Route principale
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
