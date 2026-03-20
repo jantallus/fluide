@@ -93,27 +93,23 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
       // curr.getDay() : 0 = Dimanche, 1 = Lundi, etc.
       if (days.includes(curr.getDay())) {
         // Format YYYY-MM-DD propre sans décalage de fuseau horaire
-        const dateStr = curr.toISOString().split('T')[0];
+        const year = curr.getFullYear();
+const month = String(curr.getMonth() + 1).padStart(2, '0');
+const day = String(curr.getDate()).padStart(2, '0');
+const dateStr = `${year}-${month}-${day}`;
 
-        for (const d of defs.rows) {
-          for (const m of mons.rows) {
-            const startTS = `${dateStr} ${d.start_time}`;
-            const isPause = d.label === 'PAUSE';
-
-            // Calcul de la fin du créneau
-            await client.query(`
-              INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-              VALUES ($1, $2, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-              ON CONFLICT (monitor_id, start_time) DO NOTHING
-            `, [
-              m.id, 
-              startTS, 
-              isPause ? 15 : d.duration_minutes, // Pause de 15 min par défaut si non précisé
-              isPause ? 'booked' : 'available', 
-              isPause ? '☕ PAUSE' : null
-            ]);
-          }
-        }
+for (const d of defs.rows) {
+  for (const m of mons.rows) {
+    // On force le format TIMESTAMP sans fuseau horaire
+    const startTS = `${dateStr} ${d.start_time}`;
+    
+    await client.query(`
+      INSERT INTO slots (monitor_id, start_time, end_time, status, title)
+      VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
+      ON CONFLICT (monitor_id, start_time) DO NOTHING
+    `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
+  }
+}
       }
       curr.setDate(curr.getDate() + 1);
       safetyCounter++;
