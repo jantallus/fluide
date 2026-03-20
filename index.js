@@ -156,6 +156,20 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
+  const { title, notes, status, flight_type_id, weight } = req.body;
+  try {
+    await pool.query(
+      "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5 WHERE id = $6",
+      [title, notes, status, flight_type_id, weight, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (e) { 
+    console.error("Erreur mise à jour slot:", e);
+    res.status(500).json({ error: e.message }); 
+  }
+});
+
 app.get('/api/complements', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
@@ -175,7 +189,7 @@ app.post('/api/complements', authenticateAdmin, async (req, res) => {
 });
 
 // --- MISE À JOUR / RÉSERVATION ---
-app.put('/api/appointments/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/slots/:id', authenticateAdmin, async (req, res) => {
   const { title, notes, status, flight_type_id } = req.body;
   try {
     await pool.query(
