@@ -220,19 +220,32 @@ app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- COMPLÉMENTS & BONS CADEAUX ---
-app.get('/api/complements', async (req, res) => {
+// --- COMPLÉMENTS ---
+// Lister tous les compléments (Admin)
+app.get('/api/admin/complements', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
+    const r = await pool.query('SELECT * FROM complements ORDER BY price_cents ASC');
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Ajouter un complément
 app.post('/api/complements', authenticateAdmin, async (req, res) => {
   const { name, description, price_cents } = req.body;
   try {
-    const r = await pool.query('INSERT INTO complements (name, description, price_cents) VALUES ($1, $2, $3) RETURNING *', [name, description, price_cents]);
+    const r = await pool.query(
+      'INSERT INTO complements (name, description, price_cents, is_active) VALUES ($1, $2, $3, true) RETURNING *',
+      [name, description, price_cents]
+    );
     res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Supprimer un complément
+app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM complements WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
