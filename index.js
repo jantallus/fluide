@@ -76,6 +76,15 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
   
   try {
     await client.query('BEGIN');
+
+    // --- ÉTAPE 1 : LE NETTOYAGE ---
+    // On supprime TOUT ce qui existe entre le début et la fin (inclus)
+    await client.query(`
+      DELETE FROM slots 
+      WHERE start_time::date >= $1 AND start_time::date <= $2
+    `, [startDate, endDate]);
+
+    // --- ÉTAPE 2 : LA GÉNÉRATION ---
     const defs = await client.query('SELECT * FROM slot_definitions');
     const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
     
@@ -83,32 +92,21 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
     const last = new Date(endDate);
 
     while (curr <= last) {
-      // On s'assure que daysToApply contient des nombres
       const activeDays = daysToApply.map(Number);
-      
       if (activeDays.includes(curr.getDay())) {
-        // Formatage de la date YYYY-MM-DD manuel pour éviter le décalage UTC
         const dateStr = curr.getFullYear() + '-' + 
                 String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
                 String(curr.getDate()).padStart(2, '0');
 
         for (const d of defs.rows) {
-          for (const m of mons.rows) { // On boucle sur CHAQUE moniteur
+          for (const m of mons.rows) {
             const startTS = `${dateStr} ${d.start_time}`;
-            // Correction : On définit isPause ici pour éviter l'erreur 500
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
 
             await client.query(`
               INSERT INTO slots (monitor_id, start_time, end_time, status, title)
               VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-              ON CONFLICT (monitor_id, start_time) DO NOTHING
-            `, [
-              m.id, 
-              startTS, 
-              d.duration_minutes, 
-              isPause ? 'booked' : 'available', 
-              isPause ? '☕ PAUSE' : null
-            ]);
+            `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
           }
         }
       }
@@ -118,7 +116,6 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error("ERREUR GENERATION:", e.message);
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
