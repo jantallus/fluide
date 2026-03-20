@@ -59,19 +59,12 @@ app.get('/api/flight-types', async (req, res) => {
 
 app.get('/api/slots', async (req, res) => {
   try {
-    const r = await pool.query(`
-      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
-      FROM slots s
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
-      LEFT JOIN users u ON s.monitor_id = u.id
-      ORDER BY s.start_time ASC
-    `);
-    // Debug pour voir dans les logs Railway si des données sortent
-    console.log(`Données envoyées : ${r.rows.length} créneaux`);
+    // On prend tout sans jointures compliquées pour l'instant
+    const r = await pool.query('SELECT * FROM slots ORDER BY start_time ASC');
     res.json(r.rows);
-  } catch (err) { 
-    console.error("ERREUR SQL SLOTS:", err.message);
-    res.status(500).json({ error: err.message }); 
+  } catch (err) {
+    console.error("Erreur Slots:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
