@@ -75,51 +75,39 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
   
   try {
     await client.query('BEGIN');
-    
-    // 1. Récupérer les outils de travail
     const defs = await client.query('SELECT * FROM slot_definitions');
     const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
-    
-    // On convertit les jours reçus en nombres pour être sûr
-    const days = daysToApply.map(Number);
     
     let curr = new Date(startDate);
     const last = new Date(endDate);
 
-    // Sécurité pour éviter les boucles infinies
-    let safetyCounter = 0;
+    while (curr <= last) {
+      if (daysToApply.map(Number).includes(curr.getDay())) {
+        // Correction décalage : on construit la date manuellement
+        const dateStr = curr.getFullYear() + '-' + 
+                        String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
+                        String(curr.getDate()).padStart(2, '0');
 
-    while (curr <= last && safetyCounter < 100) {
-      // curr.getDay() : 0 = Dimanche, 1 = Lundi, etc.
-      if (days.includes(curr.getDay())) {
-        // Format YYYY-MM-DD propre sans décalage de fuseau horaire
-        const year = curr.getFullYear();
-const month = String(curr.getMonth() + 1).padStart(2, '0');
-const day = String(curr.getDate()).padStart(2, '0');
-const dateStr = `${year}-${month}-${day}`;
+        for (const d of defs.rows) {
+          for (const m of mons.rows) {
+            const startTS = `${dateStr} ${d.start_time}`;
+            const isPause = d.label === 'PAUSE';
 
-for (const d of defs.rows) {
-  for (const m of mons.rows) {
-    // On force le format TIMESTAMP sans fuseau horaire
-    const startTS = `${dateStr} ${d.start_time}`;
-    
-    await client.query(`
-      INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-      VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-      ON CONFLICT (monitor_id, start_time) DO NOTHING
-    `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
-  }
-}
+            await client.query(`
+              INSERT INTO slots (monitor_id, start_time, end_time, status, title)
+              VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
+              ON CONFLICT (monitor_id, start_time) DO NOTHING
+            `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
+          }
+        }
       }
       curr.setDate(curr.getDate() + 1);
-      safetyCounter++;
     }
-
     await client.query('COMMIT');
-    res.json({ success: true, message: "Génération terminée" });
+    res.json({ success: true });
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error("ERREUR GENERATION:", e);
+    console.error("ERREUR GENERATION:", e.message); // Ceci s'affichera dans les logs Railway
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
