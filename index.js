@@ -156,6 +156,32 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/clients', authenticateAdmin, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC');
+    res.json(r.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/slots', async (req, res) => {
+  try {
+    // On récupère tout, avec des jointures simples
+    const r = await pool.query(`
+      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
+      FROM slots s
+      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
+      LEFT JOIN users u ON s.monitor_id = u.id
+      ORDER BY s.start_time ASC
+    `);
+    res.json(r.rows);
+  } catch (err) {
+    console.error("Erreur SQL Slots:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
   const { title, notes, status, flight_type_id, weight } = req.body;
   try {
@@ -164,9 +190,8 @@ app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
       [title, notes, status, flight_type_id, weight, req.params.id]
     );
     res.json({ success: true });
-  } catch (e) { 
-    console.error("Erreur mise à jour slot:", e);
-    res.status(500).json({ error: e.message }); 
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
