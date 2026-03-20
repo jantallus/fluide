@@ -77,8 +77,8 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // --- ÉTAPE 1 : LE NETTOYAGE ---
-    // On supprime TOUT ce qui existe entre le début et la fin (inclus)
+    // --- ÉTAPE 1 : LE NETTOYAGE (Anti-chevauchement) ---
+    // On supprime l'existant sur la période pour repartir de zéro
     await client.query(`
       DELETE FROM slots 
       WHERE start_time::date >= $1 AND start_time::date <= $2
@@ -116,6 +116,7 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     await client.query('ROLLBACK');
+    console.error("Erreur génération:", e.message);
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
