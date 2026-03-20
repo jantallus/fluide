@@ -250,11 +250,59 @@ app.get('/api/slot-definitions', async (req, res) => {
 app.post('/api/slot-definitions', async (req, res) => {
   const { start_time, duration_minutes, label } = req.body;
   try {
+    // calcul minutes depuis minuit
+    const [h, m] = start_time.split(':').map(Number);
+    const newStart = h * 60 + m;
+    const newEnd = newStart + parseInt(duration_minutes);
+
+    const existing = await pool.query('SELECT start_time, duration_minutes, label FROM slot_definitions');
+    for (let row of existing.rows) {
+      const [exH, exM] = row.start_time.split(':').map(Number);
+      const exStart = exH * 60 + exM;
+      const exEnd = exStart + row.duration_minutes;
+
+      if (newStart < exEnd && newEnd > exStart) {
+        return res.status(400).json({ error: `Conflit avec la rotation "${row.label}" (${row.start_time})` });
+      }
+    }
+
     const r = await pool.query(
       'INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3) RETURNING *',
       [start_time, duration_minutes, label]
     );
     res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Modifier une définition existante
+app.put('/api/slot-definitions/:id', async (req, res) => {
+  const { start_time, duration_minutes, label } = req.body;
+  try {
+    await pool.query(
+      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3 WHERE id = $4',
+      [start_time, duration_minutes, label, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/slot-definitions/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { start_time, duration_minutes, label } = req.body;
+  try {
+    // On peut réutiliser la logique de vérification de collision ici si on veut être parfait
+    await pool.query(
+      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3 WHERE id = $4',
+      [start_time, duration_minutes, label, id]
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
