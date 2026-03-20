@@ -57,7 +57,7 @@ app.get('/api/flight-types', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/appointments', async (req, res) => {
+app.get('/api/slots', async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT s.*, ft.name as flight_name, ft.color_code, u.first_name as monitor_name 
@@ -67,7 +67,10 @@ app.get('/api/appointments', async (req, res) => {
       ORDER BY s.start_time ASC
     `);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    console.error("Erreur GET /api/slots:", err);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 // --- GÉNÉRATION DES CRÉNEAUX (L'INTELLIGENCE) ---
