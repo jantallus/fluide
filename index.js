@@ -66,9 +66,11 @@ app.get('/api/slots', async (req, res) => {
       LEFT JOIN users u ON s.monitor_id = u.id
       ORDER BY s.start_time ASC
     `);
+    // Debug pour voir dans les logs Railway si des données sortent
+    console.log(`Données envoyées : ${r.rows.length} créneaux`);
     res.json(r.rows);
   } catch (err) { 
-    console.error("Erreur SQL Slots:", err.message);
+    console.error("ERREUR SQL SLOTS:", err.message);
     res.status(500).json({ error: err.message }); 
   }
 });
@@ -201,18 +203,6 @@ app.post('/api/complements', authenticateAdmin, async (req, res) => {
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- MISE À JOUR / RÉSERVATION ---
-app.put('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, flight_type_id } = req.body;
-  try {
-    await pool.query(
-      "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4 WHERE id = $5",
-      [title, notes, status, flight_type_id, req.params.id]
-    );
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // 1. Récupérer TOUS les moniteurs et admins (pour la gestion)
