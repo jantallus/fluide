@@ -288,17 +288,24 @@ app.post('/api/settings', authenticateAdmin, async (req, res) => {
 
 app.get('/api/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // FIX SÉCURITÉ : On définit "Aujourd'hui" à l'heure de Paris, pas UTC
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' }); // Format YYYY-MM-DD
     
     // Résumé de la journée
     const summary = await pool.query(`
       SELECT 
         COUNT(*) as total_slots,
-        COUNT(*) FILTER (WHERE status = 'booked' AND title NOT LIKE '☕%') as booked_slots,
-        COALESCE(SUM(ft.price_cents) FILTER (WHERE s.status = 'booked'), 0) as revenue
+        COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots,
+        COALESCE(SUM(ft.price_cents), 0) as revenue
       FROM slots s
       LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
-      WHERE s.start_time::date = $1
+      WHERE s.start_time::date = $1 AND s.status = 'booked'
+    `, [today]);
+
+    // On récupère aussi le nombre total de créneaux (libres + occupés) pour le ratio
+    const totalToday = await pool.query(`
+      SELECT COUNT(*) as count FROM slots WHERE start_time::date = $1
     `, [today]);
 
     // Les 5 prochains vols
@@ -307,20 +314,26 @@ app.get('/api/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
       FROM slots s
       LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
       LEFT JOIN users u ON s.monitor_id = u.id
-      WHERE s.start_time::date = $1 AND s.status = 'booked' AND s.title NOT LIKE '☕%'
+      WHERE s.start_time::date = $1 
+        AND s.status = 'booked' 
+        AND (s.title NOT LIKE '☕%' OR s.title IS NULL)
+        AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') -- Uniquement ce qui arrive bientôt
       ORDER BY s.start_time ASC
       LIMIT 5
     `, [today]);
 
     res.json({
       summary: {
-        todaySlots: parseInt(summary.rows[0].total_slots),
+        todaySlots: parseInt(totalToday.rows[0].count),
         bookedSlots: parseInt(summary.rows[0].booked_slots),
         revenue: parseInt(summary.rows[0].revenue)
       },
       upcoming: upcoming.rows
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    console.error("Erreur Dashboard:", err.message);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 // --- DÉMARRAGE ---
