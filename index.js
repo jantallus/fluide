@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 const app = express();
+process.env.TZ = 'Europe/Paris'; // Force le serveur à l'heure de Paris
 app.use(cors());
 app.use(express.json());
 
@@ -85,21 +86,18 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
       if (daysToApply.map(Number).includes(curr.getDay())) {
         // Correction décalage : on construit la date manuellement
         const dateStr = curr.getFullYear() + '-' + 
-                        String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
-                        String(curr.getDate()).padStart(2, '0');
+                String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
+                String(curr.getDate()).padStart(2, '0');
 
-        for (const d of defs.rows) {
-          for (const m of mons.rows) {
-            const startTS = `${dateStr} ${d.start_time}`;
-            const isPause = d.label === 'PAUSE';
-
-            await client.query(`
-              INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-              VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-              ON CONFLICT (monitor_id, start_time) DO NOTHING
-            `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
-          }
-        }
+for (const d of defs.rows) {
+  const startTS = `${dateStr} ${d.start_time}`;
+  // On utilise ::timestamp sans TimeZone pour éviter que Railway ne décale
+  await client.query(`
+    INSERT INTO slots (monitor_id, start_time, end_time, status, title)
+    VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
+    ON CONFLICT (monitor_id, start_time) DO NOTHING
+  `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
+}
       }
       curr.setDate(curr.getDate() + 1);
     }
