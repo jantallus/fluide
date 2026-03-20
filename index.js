@@ -205,6 +205,34 @@ app.get('/api/gift-cards', async (req, res) => {
   }
 });
 
+// Récupérer toutes les définitions
+app.get('/api/slot-definitions', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM slot_definitions ORDER BY start_time ASC');
+    res.json(r.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Ajouter une nouvelle définition de rotation
+app.post('/api/slot-definitions', async (req, res) => {
+  const { start_time, duration_minutes, label } = req.body;
+  try {
+    const r = await pool.query(
+      'INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3) RETURNING *',
+      [start_time, duration_minutes, label]
+    );
+    res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Supprimer une définition
+app.delete('/api/slot-definitions/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Récupérer tous les réglages
 app.get('/api/settings', async (req, res) => {
   try {
