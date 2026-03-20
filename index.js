@@ -60,7 +60,7 @@ app.get('/api/flight-types', async (req, res) => {
 app.get('/api/slots', async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT s.*, ft.name as flight_name, ft.color_code, u.first_name as monitor_name 
+      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
       FROM slots s
       LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
       LEFT JOIN users u ON s.monitor_id = u.id
@@ -68,7 +68,7 @@ app.get('/api/slots', async (req, res) => {
     `);
     res.json(r.rows);
   } catch (err) { 
-    console.error("Erreur GET /api/slots:", err);
+    console.error("Erreur SQL Slots:", err.message);
     res.status(500).json({ error: err.message }); 
   }
 });
@@ -165,21 +165,11 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/slots', async (req, res) => {
+app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
   try {
-    // On récupère tout, avec des jointures simples
-    const r = await pool.query(`
-      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
-      FROM slots s
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
-      LEFT JOIN users u ON s.monitor_id = u.id
-      ORDER BY s.start_time ASC
-    `);
+    const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC');
     res.json(r.rows);
-  } catch (err) {
-    console.error("Erreur SQL Slots:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
