@@ -74,39 +74,62 @@ app.get('/api/appointments', async (req, res) => {
 app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
   const { startDate, endDate, daysToApply } = req.body;
   const client = await pool.connect();
+  
   try {
     await client.query('BEGIN');
+    
+    // 1. Récupérer les outils de travail
     const defs = await client.query('SELECT * FROM slot_definitions');
     const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    
+    // On convertit les jours reçus en nombres pour être sûr
+    const days = daysToApply.map(Number);
     
     let curr = new Date(startDate);
     const last = new Date(endDate);
 
-    while (curr <= last) {
-      if (daysToApply.map(Number).includes(curr.getDay())) {
-        const dateStr = curr.toLocaleDateString('en-CA'); // Format YYYY-MM-DD local
+    // Sécurité pour éviter les boucles infinies
+    let safetyCounter = 0;
+
+    while (curr <= last && safetyCounter < 100) {
+      // curr.getDay() : 0 = Dimanche, 1 = Lundi, etc.
+      if (days.includes(curr.getDay())) {
+        // Format YYYY-MM-DD propre sans décalage de fuseau horaire
+        const dateStr = curr.toISOString().split('T')[0];
 
         for (const d of defs.rows) {
           for (const m of mons.rows) {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = d.label === 'PAUSE';
 
+            // Calcul de la fin du créneau
             await client.query(`
               INSERT INTO slots (monitor_id, start_time, end_time, status, title)
               VALUES ($1, $2, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
               ON CONFLICT (monitor_id, start_time) DO NOTHING
-            `, [m.id, startTS, isPause ? 59 : d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
+            `, [
+              m.id, 
+              startTS, 
+              isPause ? 15 : d.duration_minutes, // Pause de 15 min par défaut si non précisé
+              isPause ? 'booked' : 'available', 
+              isPause ? '☕ PAUSE' : null
+            ]);
           }
         }
       }
       curr.setDate(curr.getDate() + 1);
+      safetyCounter++;
     }
+
     await client.query('COMMIT');
-    res.json({ success: true });
-  } catch (e) { 
-    await client.query('ROLLBACK'); 
-    res.status(500).json({ error: e.message }); 
-  } finally { client.release(); }
+    res.json({ success: true, message: "Génération terminée" });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error("ERREUR GENERATION:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 // Créer une nouvelle prestation
