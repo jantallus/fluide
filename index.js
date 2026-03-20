@@ -158,15 +158,15 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Route principale
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC');
     res.json(r.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// L'alias (pour que l'autre appel marche aussi)
 app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC');
