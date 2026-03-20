@@ -83,21 +83,34 @@ app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
     const last = new Date(endDate);
 
     while (curr <= last) {
-      if (daysToApply.map(Number).includes(curr.getDay())) {
-        // Correction décalage : on construit la date manuellement
+      // On s'assure que daysToApply contient des nombres
+      const activeDays = daysToApply.map(Number);
+      
+      if (activeDays.includes(curr.getDay())) {
+        // Formatage de la date YYYY-MM-DD manuel pour éviter le décalage UTC
         const dateStr = curr.getFullYear() + '-' + 
                 String(curr.getMonth() + 1).padStart(2, '0') + '-' + 
                 String(curr.getDate()).padStart(2, '0');
 
-for (const d of defs.rows) {
-  const startTS = `${dateStr} ${d.start_time}`;
-  // On utilise ::timestamp sans TimeZone pour éviter que Railway ne décale
-  await client.query(`
-    INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-    VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-    ON CONFLICT (monitor_id, start_time) DO NOTHING
-  `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
-}
+        for (const d of defs.rows) {
+          for (const m of mons.rows) { // On boucle sur CHAQUE moniteur
+            const startTS = `${dateStr} ${d.start_time}`;
+            // Correction : On définit isPause ici pour éviter l'erreur 500
+            const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
+
+            await client.query(`
+              INSERT INTO slots (monitor_id, start_time, end_time, status, title)
+              VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
+              ON CONFLICT (monitor_id, start_time) DO NOTHING
+            `, [
+              m.id, 
+              startTS, 
+              d.duration_minutes, 
+              isPause ? 'booked' : 'available', 
+              isPause ? '☕ PAUSE' : null
+            ]);
+          }
+        }
       }
       curr.setDate(curr.getDate() + 1);
     }
@@ -105,7 +118,7 @@ for (const d of defs.rows) {
     res.json({ success: true });
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error("ERREUR GENERATION:", e.message); // Ceci s'affichera dans les logs Railway
+    console.error("ERREUR GENERATION:", e.message);
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
