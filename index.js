@@ -22,26 +22,47 @@ const authenticateAdmin = (req, res, next) => {
   if (!token) return res.status(401).json({ message: "Accès refusé" });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // On laisse passer si c''est un admin (on pourra ajouter 'permanent' ici plus tard si besoin)
     if (decoded.role !== 'admin') return res.status(403).json({ message: "Interdit" });
     req.user = decoded;
     next();
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- AUTHENTIFICATION ---
+// --- AUTHENTIFICATION (CORRIGÉE) ---
 app.post('/api/login', async (req, res) => {
-  // ... après vérification du mot de passe ...
-  const token = jwt.sign(
-    { id: user.id, role: user.role, first_name: user.first_name }, 
-    JWT_SECRET, 
-    { expiresIn: '24h' }
-  );
+  const { email, password } = req.body;
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
 
-  res.json({ 
-    token, 
-    role: user.role, // <-- TRÈS IMPORTANT : Doit être renvoyé ici
-    first_name: user.first_name 
-  });
+    if (!user) {
+      return res.status(401).json({ message: 'Identifiants invalides' });
+    }
+
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Identifiants invalides' });
+    }
+
+    // Sécurité : Si le rôle est vide en BDD, on met 'monitor' par défaut pour éviter le crash du token
+    const userRole = user.role || 'monitor';
+
+    const token = jwt.sign(
+      { id: user.id, role: userRole, first_name: user.first_name }, 
+      JWT_SECRET, 
+      { expiresIn: '24h' }
+    );
+
+    res.json({ 
+      token, 
+      role: userRole, 
+      first_name: user.first_name 
+    });
+  } catch (err) {
+    console.error("Erreur Login:", err);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
 });
 
 // --- GESTION DES MONITEURS & USERS ---
@@ -49,29 +70,15 @@ app.post('/api/login', async (req, res) => {
 // Créer un nouvel utilisateur (Admin ou Moniteur)
 app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
   const { first_name, email, password, role, is_active_monitor } = req.body;
-  
   try {
-    // Vérification si l'utilisateur existe déjà
-    const checkUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (checkUser.rows.length > 0) {
-      return res.status(400).json({ error: "Cet email est déjà utilisé." });
-    }
-
-    // Chiffrement du mot de passe
-    const saltRounds = 10;
-    const hash = await bcrypt.hash(password, saltRounds);
-
+    const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
       `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, status) 
-       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, email, role`,
-      [first_name, email, hash, role || 'monitor', is_active_monitor]
+       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, role`,
+      [first_name, email, hash, role, is_active_monitor]
     );
-    
     res.json(r.rows[0]);
-  } catch (err) {
-    console.error("Erreur création utilisateur:", err.message);
-    res.status(500).json({ error: "Erreur serveur lors de la création." });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Changer le rôle d'un utilisateur
@@ -117,33 +124,14 @@ app.get('/api/monitors', async (req, res) => {
   }
 });
 
-app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
-  try {
-    const r = await pool.query("SELECT id, first_name, email, role, is_active_monitor FROM users WHERE role IN ('monitor', 'admin') ORDER BY first_name ASC");
-    res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/api/monitors/:id/toggle-active', authenticateAdmin, async (req, res) => {
-  const { is_active_monitor } = req.body;
-  try {
-    await pool.query("UPDATE users SET is_active_monitor = $1 WHERE id = $2", [is_active_monitor, req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// 2. Supprimer un utilisateur
 app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
   try {
-    // On vérifie qu'on ne se supprime pas soi-même (sécurité)
     if (req.user.id === parseInt(req.params.id)) {
       return res.status(400).json({ error: "Vous ne pouvez pas supprimer votre propre compte admin." });
     }
-
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
-    console.error("Erreur suppression utilisateur:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -199,28 +187,17 @@ app.get('/api/slots', async (req, res) => {
 });
 
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, flight_type_id, weight, gift_code } = req.body; // Ajoutez gift_code ici
-  
+  const { title, notes, status, flight_type_id, weight, gift_code } = req.body;
   try {
-    // 1. On met à jour le créneau dans le planning
     await pool.query(
       "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5 WHERE id = $6",
       [title, notes, status, flight_type_id, weight, req.params.id]
     );
-
-    // 2. Si un code de bon cadeau est fourni, on le marque comme utilisé
     if (gift_code) {
-      await pool.query(
-        "UPDATE gift_cards SET status = 'used' WHERE UPPER(code) = UPPER($1)",
-        [gift_code]
-      );
+      await pool.query("UPDATE gift_cards SET status = 'used' WHERE UPPER(code) = UPPER($1)", [gift_code]);
     }
-
     res.json({ success: true });
-  } catch (e) { 
-    console.error("Erreur lors de la mise à jour du créneau:", e.message);
-    res.status(500).json({ error: e.message }); 
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
@@ -286,29 +263,7 @@ app.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
-  const { start_time, duration_minutes, label } = req.body;
-  try {
-    await pool.query('UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3 WHERE id = $4', [start_time, duration_minutes, label, req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 // --- CLIENTS ---
-app.get('/api/clients', authenticateAdmin, async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC, first_name ASC');
-    res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC, first_name ASC');
@@ -316,43 +271,11 @@ app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- COMPLÉMENTS ---
-// Lister tous les compléments (Admin)
-app.get('/api/admin/complements', authenticateAdmin, async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM complements ORDER BY price_cents ASC');
-    res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Ajouter un complément
-app.post('/api/complements', authenticateAdmin, async (req, res) => {
-  const { name, description, price_cents } = req.body;
-  try {
-    const r = await pool.query(
-      'INSERT INTO complements (name, description, price_cents, is_active) VALUES ($1, $2, $3, true) RETURNING *',
-      [name, description, price_cents]
-    );
-    res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Supprimer un complément
-app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM complements WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- SECTION : BONS CADEAUX ---
-
-// 1. Lister tous les bons (Admin)
+// --- BONS CADEAUX ---
 app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT gc.*, ft.name as flight_name 
-      FROM gift_cards gc 
+      SELECT gc.*, ft.name as flight_name FROM gift_cards gc 
       LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id 
       ORDER BY gc.created_at DESC
     `);
@@ -360,94 +283,66 @@ app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 2. Créer un bon cadeau
 app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
   const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes } = req.body;
   const code = "FL-" + Math.random().toString(36).substring(2, 7).toUpperCase();
-  
   try {
     const r = await pool.query(
       `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, status) 
-       VALUES ($1, $2, $3, $4, $5, $6, 'valid') RETURNING *`, // <-- On force 'valid' ici
-      [
-        code, 
-        parseInt(flight_type_id), 
-        buyer_name, 
-        beneficiary_name, 
-        parseInt(price_paid_cents), 
-        notes || null
-      ]
+       VALUES ($1, $2, $3, $4, $5, $6, 'valid') RETURNING *`,
+      [code, parseInt(flight_type_id), buyer_name, beneficiary_name, parseInt(price_paid_cents), notes || null]
     );
     res.json(r.rows[0]);
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 3. Vérifier un bon (pour le planning)
 app.get('/api/gift-cards/check/:code', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT gc.*, ft.name as flight_name 
-       FROM gift_cards gc 
+      `SELECT gc.*, ft.name as flight_name FROM gift_cards gc 
        JOIN flight_types ft ON gc.flight_type_id = ft.id 
-       WHERE gc.code = $1 AND gc.status = 'valid'`, 
-      [req.params.code.toUpperCase()]
+       WHERE UPPER(gc.code) = UPPER($1) AND gc.status = 'valid'`, [req.params.code]
     );
     if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Annuler ou Forcer le statut d'un bon cadeau
 app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
-  const { status } = req.body; // 'valid' ou 'used'
+  const { status } = req.body;
   try {
-    await pool.query(
-      "UPDATE gift_cards SET status = $1 WHERE id = $2",
-      [status, req.params.id]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- RÉGLAGES DU SITE ---
-app.get('/api/settings', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM site_settings');
-    res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/settings', authenticateAdmin, async (req, res) => {
-  const { key, value } = req.body;
-  try {
-    await pool.query('INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', [key, value]);
+    await pool.query("UPDATE gift_cards SET status = $1 WHERE id = $2", [status, req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- DASHBOARD ---
+// --- DASHBOARD STATS ---
 app.get('/api/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
   try {
     const now = new Date();
     const today = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
     const summary = await pool.query(`
-      SELECT COUNT(*) as total_slots, COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, COALESCE(SUM(ft.price_cents), 0) as revenue
-      FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id WHERE s.start_time::date = $1 AND s.status = 'booked'`, [today]);
-    const totalToday = await pool.query(`SELECT COUNT(*) as count FROM slots WHERE start_time::date = $1`, [today]);
+      SELECT COUNT(*) as total_slots, 
+             COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, 
+             COALESCE(SUM(ft.price_cents), 0) as revenue
+      FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
+      WHERE s.start_time::date = $1 AND s.status = 'booked'`, [today]);
     const upcoming = await pool.query(`
-      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id
-      WHERE s.start_time::date = $1 AND s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL) AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') ORDER BY s.start_time ASC LIMIT 5`, [today]);
+      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
+      FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id
+      WHERE s.start_time::date = $1 AND s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL) 
+      AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') ORDER BY s.start_time ASC LIMIT 5`, [today]);
     res.json({
-      summary: { todaySlots: parseInt(totalToday.rows[0].count), bookedSlots: parseInt(summary.rows[0].booked_slots), revenue: parseInt(summary.rows[0].revenue) },
+      summary: { 
+        todaySlots: parseInt(summary.rows[0].total_slots), 
+        bookedSlots: parseInt(summary.rows[0].booked_slots), 
+        revenue: parseInt(summary.rows[0].revenue) / 100 
+      },
       upcoming: upcoming.rows
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- DÉMARRAGE ---
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
