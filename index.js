@@ -39,30 +39,50 @@ const authenticateAdmin = (req, res, next) => {
 // --- AUTHENTIFICATION (CORRIGÉE SANS RIEN SUPPRIMER DU RESTE) ---
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
+  console.log("--- TENTATIVE DE CONNEXION ---");
+  console.log("Email reçu:", email);
+
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
-    if (!user) return res.status(401).json({ message: 'Identifiants invalides' });
-
-    // --- DOUBLE VÉRIFICATION ---
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    
-    // MOT DE PASSE DE SECOURS (Si le hachage SQL bug)
-    const isMaster = (password === 'FLUIDE2026!'); 
-
-    if (!isValid && !isMaster) {
+    if (!user) {
+      console.log("RÉSULTAT: Utilisateur non trouvé en BDD");
       return res.status(401).json({ message: 'Identifiants invalides' });
     }
 
+    console.log("Utilisateur trouvé:", user.email);
+    console.log("Rôle en BDD:", user.role);
+
+    // Comparaison Bcrypt
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    console.log("Mot de passe valide (Bcrypt) ?:", isValid);
+
+    // --- DOUBLE SÉCURITÉ POUR TOI ---
+    // Si Bcrypt échoue, on teste le mot de passe de secours en clair
+    const isMaster = (password === 'FLUIDE2026!');
+
+    if (!isValid && !isMaster) {
+      console.log("RÉSULTAT: Échec des deux méthodes de mot de passe");
+      return res.status(401).json({ message: 'Identifiants invalides' });
+    }
+
+    if (isMaster) console.log("CONNEXION RÉUSSIE VIA MASTER PASSWORD");
+
     const token = jwt.sign(
-      { id: user.id, role: user.role || 'admin', first_name: user.first_name }, 
-      JWT_SECRET, 
+      { id: user.id, role: user.role || 'admin', first_name: user.first_name },
+      JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.json({ token, role: user.role || 'admin', first_name: user.first_name });
+    res.json({
+      token,
+      role: user.role || 'admin',
+      first_name: user.first_name
+    });
+
   } catch (err) {
+    console.error("ERREUR CRITIQUE LOGIN:", err);
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
