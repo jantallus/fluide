@@ -44,6 +44,30 @@ app.post('/api/login', async (req, res) => {
 });
 
 // --- GESTION DES MONITEURS & USERS ---
+
+// Créer un nouvel utilisateur (Admin ou Moniteur)
+app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
+  const { first_name, email, password, role, is_active_monitor } = req.body;
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, status) 
+       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, role`,
+      [first_name, email, hash, role, is_active_monitor]
+    );
+    res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Changer le rôle d'un utilisateur
+app.patch('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
+  const { role } = req.body;
+  try {
+    await pool.query("UPDATE users SET role = $1 WHERE id = $2", [role, req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/monitors', async (req, res) => {
   try {
     const r = await pool.query("SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif'");
