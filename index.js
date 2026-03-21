@@ -82,11 +82,21 @@ app.patch('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/monitors', async (req, res) => {
+app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query("SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    // On récupère TOUS les utilisateurs qui ne sont pas de simples clients
+    const r = await pool.query(`
+      SELECT id, first_name, email, role, is_active_monitor, status 
+      FROM users 
+      WHERE role IN ('admin', 'permanent', 'monitor') 
+      ORDER BY 
+        CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, 
+        first_name ASC
+    `);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
