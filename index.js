@@ -6,7 +6,15 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 process.env.TZ = 'Europe/Paris'; 
-app.use(cors());
+
+// --- CONFIGURATION CORS RENFORCÉE (INDISPENSABLE) ---
+app.use(cors({
+  origin: '*', // Permet à n'importe quel domaine (ton site) de contacter l'API
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 const pool = new Pool({
