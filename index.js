@@ -280,18 +280,29 @@ app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
 
 // 2. Créer un bon cadeau
 app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
-  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents } = req.body;
-  // Génération d'un code unique style "FLUIDE-ABC12"
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes } = req.body;
+  
+  // Génération du code
   const code = "FL-" + Math.random().toString(36).substring(2, 7).toUpperCase();
   
   try {
     const r = await pool.query(
-      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents) 
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents]
+      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [
+        code, 
+        parseInt(flight_type_id), 
+        buyer_name, 
+        beneficiary_name, 
+        parseInt(price_paid_cents), 
+        notes || null
+      ]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    console.error("Erreur SQL Gift Card:", err.message);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 // 3. Vérifier un bon (pour le planning)
