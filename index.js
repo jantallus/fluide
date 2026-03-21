@@ -281,14 +281,12 @@ app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
 // 2. Créer un bon cadeau
 app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
   const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes } = req.body;
-  
-  // Génération du code
   const code = "FL-" + Math.random().toString(36).substring(2, 7).toUpperCase();
   
   try {
     const r = await pool.query(
-      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, status) 
+       VALUES ($1, $2, $3, $4, $5, $6, 'valid') RETURNING *`, // <-- On force 'valid' ici
       [
         code, 
         parseInt(flight_type_id), 
@@ -300,7 +298,6 @@ app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
     );
     res.json(r.rows[0]);
   } catch (err) { 
-    console.error("Erreur SQL Gift Card:", err.message);
     res.status(500).json({ error: err.message }); 
   }
 });
@@ -318,6 +315,20 @@ app.get('/api/gift-cards/check/:code', async (req, res) => {
     if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Annuler ou Forcer le statut d'un bon cadeau
+app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
+  const { status } = req.body; // 'valid' ou 'used'
+  try {
+    await pool.query(
+      "UPDATE gift_cards SET status = $1 WHERE id = $2",
+      [status, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- RÉGLAGES DU SITE ---
