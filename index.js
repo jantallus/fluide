@@ -117,14 +117,28 @@ app.get('/api/slots', async (req, res) => {
 });
 
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, flight_type_id, weight } = req.body;
+  const { title, notes, status, flight_type_id, weight, gift_code } = req.body; // Ajoutez gift_code ici
+  
   try {
+    // 1. On met à jour le créneau dans le planning
     await pool.query(
       "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5 WHERE id = $6",
       [title, notes, status, flight_type_id, weight, req.params.id]
     );
+
+    // 2. Si un code de bon cadeau est fourni, on le marque comme utilisé
+    if (gift_code) {
+      await pool.query(
+        "UPDATE gift_cards SET status = 'used' WHERE UPPER(code) = UPPER($1)",
+        [gift_code]
+      );
+    }
+
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { 
+    console.error("Erreur lors de la mise à jour du créneau:", e.message);
+    res.status(500).json({ error: e.message }); 
+  }
 });
 
 app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
@@ -249,10 +263,49 @@ app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- SECTION : BONS CADEAUX ---
+
+// 1. Lister tous les bons (Admin)
 app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id ORDER BY gc.created_at DESC`);
+    const r = await pool.query(`
+      SELECT gc.*, ft.name as flight_name 
+      FROM gift_cards gc 
+      LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id 
+      ORDER BY gc.created_at DESC
+    `);
     res.json(r.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 2. Créer un bon cadeau
+app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents } = req.body;
+  // Génération d'un code unique style "FLUIDE-ABC12"
+  const code = "FL-" + Math.random().toString(36).substring(2, 7).toUpperCase();
+  
+  try {
+    const r = await pool.query(
+      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents]
+    );
+    res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 3. Vérifier un bon (pour le planning)
+app.get('/api/gift-cards/check/:code', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT gc.*, ft.name as flight_name 
+       FROM gift_cards gc 
+       JOIN flight_types ft ON gc.flight_type_id = ft.id 
+       WHERE gc.code = $1 AND gc.status = 'valid'`, 
+      [req.params.code.toUpperCase()]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
+    res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
