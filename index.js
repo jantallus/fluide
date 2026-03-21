@@ -25,9 +25,24 @@ const pool = new Pool({
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
 // --- MIDDLEWARE AUTH ---
+// index.js (Ligne ~30)
 const authenticateAdmin = (req, res, next) => {
-  // ON FORCE LE PASSAGE POUR TESTER
+  // --- TEST DE SURVIE : ON LAISSE TOUT PASSER ---
+  console.log("Passage forcé : Sécurité désactivée");
   next(); 
+  
+  /* Ancien code (on le garde en commentaire pour plus tard) :
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: "Accès refusé" });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'admin') return res.status(403).json({ message: "Interdit" });
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Token invalide" });
+  }
+  */
 };
 
 // --- AUTHENTIFICATION (CORRIGÉE SANS RIEN SUPPRIMER DU RESTE) ---
