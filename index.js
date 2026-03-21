@@ -30,17 +30,18 @@ const authenticateAdmin = (req, res, next) => {
 
 // --- AUTHENTIFICATION ---
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const r = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    const user = r.rows[0];
-    if (user && await bcrypt.compare(password, user.password_hash)) {
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET);
-      res.json({ token, user: { id: user.id, role: user.role, first_name: user.first_name } });
-    } else {
-      res.status(401).json({ message: "Identifiants invalides" });
-    }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  // ... après vérification du mot de passe ...
+  const token = jwt.sign(
+    { id: user.id, role: user.role, first_name: user.first_name }, 
+    JWT_SECRET, 
+    { expiresIn: '24h' }
+  );
+
+  res.json({ 
+    token, 
+    role: user.role, // <-- TRÈS IMPORTANT : Doit être renvoyé ici
+    first_name: user.first_name 
+  });
 });
 
 // --- GESTION DES MONITEURS & USERS ---
