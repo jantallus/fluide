@@ -48,15 +48,29 @@ app.post('/api/login', async (req, res) => {
 // Créer un nouvel utilisateur (Admin ou Moniteur)
 app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
   const { first_name, email, password, role, is_active_monitor } = req.body;
+  
   try {
-    const hash = await bcrypt.hash(password, 10);
+    // Vérification si l'utilisateur existe déjà
+    const checkUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (checkUser.rows.length > 0) {
+      return res.status(400).json({ error: "Cet email est déjà utilisé." });
+    }
+
+    // Chiffrement du mot de passe
+    const saltRounds = 10;
+    const hash = await bcrypt.hash(password, saltRounds);
+
     const r = await pool.query(
       `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, status) 
-       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, role`,
-      [first_name, email, hash, role, is_active_monitor]
+       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, email, role`,
+      [first_name, email, hash, role || 'monitor', is_active_monitor]
     );
+    
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("Erreur création utilisateur:", err.message);
+    res.status(500).json({ error: "Erreur serveur lors de la création." });
+  }
 });
 
 // Changer le rôle d'un utilisateur
@@ -88,6 +102,22 @@ app.patch('/api/monitors/:id/toggle-active', authenticateAdmin, async (req, res)
     await pool.query("UPDATE users SET is_active_monitor = $1 WHERE id = $2", [is_active_monitor, req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 2. Supprimer un utilisateur
+app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+  try {
+    // On vérifie qu'on ne se supprime pas soi-même (sécurité)
+    if (req.user.id === parseInt(req.params.id)) {
+      return res.status(400).json({ error: "Vous ne pouvez pas supprimer votre propre compte admin." });
+    }
+
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Erreur suppression utilisateur:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- PRESTATIONS (FLIGHT TYPES) ---
