@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 const app = express();
-process.env.TZ = 'Europe/Paris'; // Force le serveur à l'heure de Paris
+process.env.TZ = 'Europe/Paris'; 
 app.use(cors());
 app.use(express.json());
 
@@ -22,14 +22,13 @@ const authenticateAdmin = (req, res, next) => {
   if (!token) return res.status(401).json({ message: "Accès refusé" });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    // On laisse passer si c''est un admin (on pourra ajouter 'permanent' ici plus tard si besoin)
     if (decoded.role !== 'admin') return res.status(403).json({ message: "Interdit" });
     req.user = decoded;
     next();
   } catch (err) { res.status(401).json({ message: "Token invalide" }); }
 };
 
-// --- AUTHENTIFICATION (CORRIGÉE) ---
+// --- AUTHENTIFICATION (CORRIGÉE SANS RIEN SUPPRIMER DU RESTE) ---
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -45,7 +44,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ message: 'Identifiants invalides' });
     }
 
-    // Sécurité : Si le rôle est vide en BDD, on met 'monitor' par défaut pour éviter le crash du token
+    // Sécurité : Si le rôle est vide en BDD, on met 'monitor' par défaut
     const userRole = user.role || 'monitor';
 
     const token = jwt.sign(
@@ -66,8 +65,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 // --- GESTION DES MONITEURS & USERS ---
-
-// Créer un nouvel utilisateur (Admin ou Moniteur)
 app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
   const { first_name, email, password, role, is_active_monitor } = req.body;
   try {
@@ -81,7 +78,6 @@ app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Changer le rôle d'un utilisateur
 app.patch('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
   const { role } = req.body;
   try {
@@ -90,7 +86,6 @@ app.patch('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- GESTION DE L'ÉQUIPE (POUR L'INTERFACE ADMIN) ---
 app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -107,7 +102,6 @@ app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
   }
 });
 
-// --- LISTE TECHNIQUE (POUR LE CALENDRIER ET GÉNÉRATEUR) ---
 app.get('/api/monitors', async (req, res) => {
   try {
     const r = await pool.query(`
