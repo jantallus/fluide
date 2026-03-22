@@ -48,11 +48,12 @@ const authenticateAdmin = (req, res, next) => {
 // --- AUTHENTIFICATION (CORRIGÉE SANS RIEN SUPPRIMER DU RESTE) ---
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  console.log("--- TENTATIVE DE CONNEXION ---");
+  console.log("Tentative de connexion pour :", email);
   console.log("Email reçu:", email);
 
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    console.log("Utilisateur trouvé en base ?", r.rows.length > 0);
     const user = result.rows[0];
 
     if (!user) {
