@@ -206,17 +206,45 @@ app.get('/api/flight-types', async (req, res) => {
 });
 
 app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
+  const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]'; // Conversion en JSON
+  
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [name, duration_minutes, price_cents, start, end, color_code]
+      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots } = req.body;
+  const start = restricted_start_time === '' ? null : restricted_start_time;
+  const end = restricted_end_time === '' ? null : restricted_end_time;
+  const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]'; // Conversion en JSON
+
+  try {
+    await pool.query(
+      `UPDATE flight_types 
+       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7 
+       WHERE id = $8`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM flight_types WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { 
+    res.status(500).json({ error: "Impossible de supprimer ce vol car il est utilisé." }); 
+  }
 });
 
 app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
