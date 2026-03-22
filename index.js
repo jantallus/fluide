@@ -97,7 +97,8 @@ app.post('/api/login', async (req, res) => {
 });
 
 // --- GESTION DES MONITEURS & USERS ---
-app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
+// --- CRÉATION UTILISATEUR (URL SIMPLIFIÉE) ---
+app.post('/api/users', authenticateAdmin, async (req, res) => {
   const { first_name, email, password, role, is_active_monitor } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
@@ -110,12 +111,15 @@ app.post('/api/admin/users', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
+// --- CHANGEMENT DE RÔLE (URL SIMPLIFIÉE) ---
+app.patch('/api/users/:id/role', authenticateAdmin, async (req, res) => {
   const { role } = req.body;
   try {
     await pool.query("UPDATE users SET role = $1 WHERE id = $2", [role, req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
@@ -150,16 +154,16 @@ app.get('/api/monitors', async (req, res) => {
   }
 });
 
-app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+// --- SUPPRESSION UTILISATEUR (URL SIMPLIFIÉE) ---
+app.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
   try {
-    if (req.user.id === parseInt(req.params.id)) {
-      return res.status(400).json({ error: "Vous ne pouvez pas supprimer votre propre compte admin." });
+    // req.user.id vient du token décodé (si sécurité activée)
+    if (req.user && req.user.id === req.params.id) {
+      return res.status(400).json({ error: "Interdit de supprimer son propre compte." });
     }
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- PRESTATIONS (FLIGHT TYPES) ---
@@ -201,6 +205,34 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM flight_types WHERE id = $1', [req.params.id]);
     res.json({ success: true });
+  } catch (err) { 
+    res.status(500).json({ error: "Impossible de supprimer ce vol car il est utilisé dans des réservations ou des bons cadeaux." }); 
+  }
+});
+
+// --- COMPLÉMENTS (OPTIONS VOL) ---
+app.get('/api/complements', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
+    res.json(r.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/complements', authenticateAdmin, async (req, res) => {
+  const { name, description, price_cents } = req.body;
+  try {
+    const r = await pool.query(
+      'INSERT INTO complements (name, description, price_cents, is_active) VALUES ($1, $2, $3, true) RETURNING *',
+      [name, description, price_cents]
+    );
+    res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM complements WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -213,25 +245,24 @@ app.get('/api/slots', async (req, res) => {
 });
 
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, flight_type_id, weight, gift_code } = req.body;
+  const { title, notes, status, flight_type_id, weight, monitor_id } = req.body;
   try {
     await pool.query(
-      "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5 WHERE id = $6",
-      [title, notes, status, flight_type_id, weight, req.params.id]
+      "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5, monitor_id = $6 WHERE id = $7",
+      [title, notes, status, flight_type_id, weight, monitor_id, req.params.id]
     );
-    if (gift_code) {
-      await pool.query("UPDATE gift_cards SET status = 'used' WHERE UPPER(code) = UPPER($1)", [gift_code]);
-    }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/admin/generate-slots', authenticateAdmin, async (req, res) => {
+app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
   const { startDate, endDate, daysToApply } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // On nettoie l'existant sur la période
     await client.query(`DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2`, [startDate, endDate]);
+    
     const defs = await client.query('SELECT * FROM slot_definitions');
     const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
     let curr = new Date(startDate);
@@ -290,11 +321,14 @@ app.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
 });
 
 // --- CLIENTS ---
-app.get('/api/admin/clients', authenticateAdmin, async (req, res) => {
+app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC, first_name ASC');
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("Erreur GET /api/clients:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- BONS CADEAUX ---
@@ -319,7 +353,10 @@ app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
       [code, parseInt(flight_type_id), buyer_name, beneficiary_name, parseInt(price_paid_cents), notes || null]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.get('/api/gift-cards/check/:code', async (req, res) => {
@@ -343,30 +380,132 @@ app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
 });
 
 // --- DASHBOARD STATS ---
-app.get('/api/admin/dashboard-stats', authenticateAdmin, async (req, res) => {
+app.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
   try {
-    const now = new Date();
-    const today = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+    
     const summary = await pool.query(`
-      SELECT COUNT(*) as total_slots, 
-             COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, 
-             COALESCE(SUM(ft.price_cents), 0) as revenue
-      FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
-      WHERE s.start_time::date = $1 AND s.status = 'booked'`, [today]);
+      SELECT 
+        COUNT(*) as total_slots, 
+        COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, 
+        COALESCE(SUM(ft.price_cents), 0) as revenue
+      FROM slots s 
+      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
+      WHERE s.start_time::date = $1`, [today]);
+
     const upcoming = await pool.query(`
-      SELECT s.*, ft.name as flight_name, u.first_name as monitor_name 
-      FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id
-      WHERE s.start_time::date = $1 AND s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL) 
-      AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') ORDER BY s.start_time ASC LIMIT 5`, [today]);
+      SELECT s.id, s.start_time, s.title, ft.name as flight_name, u.first_name as monitor_name, s.notes
+      FROM slots s 
+      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
+      LEFT JOIN users u ON s.monitor_id = u.id
+      WHERE s.start_time::date = $1 
+      AND s.status = 'booked' 
+      AND (s.title NOT LIKE '☕%' OR s.title IS NULL) 
+      AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') 
+      ORDER BY s.start_time ASC 
+      LIMIT 5`, [today]);
+
     res.json({
       summary: { 
-        todaySlots: parseInt(summary.rows[0].total_slots), 
-        bookedSlots: parseInt(summary.rows[0].booked_slots), 
-        revenue: parseInt(summary.rows[0].revenue) / 100 
+        todaySlots: parseInt(summary.rows[0].total_slots) || 0, 
+        bookedSlots: parseInt(summary.rows[0].booked_slots) || 0, 
+        revenue: parseInt(summary.rows[0].revenue) || 0 
       },
       upcoming: upcoming.rows
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("Erreur Dashboard:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- CONFIGURATION : SAISON (Dates de début et fin) ---
+app.get('/api/settings', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT key, value FROM site_settings');
+    // Renvoie un tableau [{key: 'season_start', value: '...'}, ...]
+    res.json(r.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', authenticateAdmin, async (req, res) => {
+  const { key, value } = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO site_settings (key, value) VALUES ($1, $2) 
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, value]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- CONFIGURATION : MODIFIER UNE ROTATION EXISTANTE (PUT) ---
+app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+  const { start_time, duration_minutes, label } = req.body;
+  const { id } = req.params;
+  try {
+    await pool.query(
+      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3 WHERE id = $4',
+      [start_time, duration_minutes, label, id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- COMPLÉMENTS (OPTIONS SUPPLÉMENTAIRES) ---
+app.get('/api/complements', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
+    res.json(r.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- STATISTIQUES GLOBALES ---
+app.get('/api/stats', authenticateAdmin, async (req, res) => {
+  try {
+    // 1. Calcul du CA global et nombre de vols
+    const summaryResult = await pool.query(`
+      SELECT 
+        COALESCE(SUM(ft.price_cents), 0) as total_revenue,
+        COUNT(s.id) as total_bookings
+      FROM slots s
+      JOIN flight_types ft ON s.flight_type_id = ft.id
+      WHERE s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL)
+    `);
+
+    // 2. Liste des sessions à venir (pour le tableau)
+    const upcomingResult = await pool.query(`
+      SELECT 
+        s.id, s.start_time, s.title as client_name, 
+        ft.name as flight_name, ft.price_cents as total_price,
+        u.first_name as monitor_name
+      FROM slots s
+      JOIN flight_types ft ON s.flight_type_id = ft.id
+      LEFT JOIN users u ON s.monitor_id = u.id
+      WHERE s.status = 'booked' 
+      AND s.start_time >= NOW()
+      ORDER BY s.start_time ASC
+    `);
+
+    res.json({
+      summary: {
+        totalRevenue: parseInt(summaryResult.rows[0].total_revenue),
+        totalBookings: parseInt(summaryResult.rows[0].total_bookings)
+      },
+      upcoming: upcomingResult.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- DÉMARRAGE ---
