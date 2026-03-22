@@ -52,48 +52,50 @@ app.post('/api/login', async (req, res) => {
   console.log("Email reçu:", email);
 
   try {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    console.log("Utilisateur trouvé en base ?", r.rows.length > 0);
-    const user = result.rows[0];
+    // 1. Recherche de l'utilisateur (on utilise 'r' comme nom de variable)
+    // Utilisation de LOWER pour éviter les problèmes de majuscules
+    const r = await pool.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [email]);
 
-    if (!user) {
+    // 2. Vérification si l'utilisateur existe
+    if (r.rows.length === 0) {
       console.log("RÉSULTAT: Utilisateur non trouvé en BDD");
-      return res.status(401).json({ message: 'Identifiants invalides' });
+      return res.status(401).json({ error: "Identifiants incorrects" });
     }
 
-    console.log("Utilisateur trouvé:", user.email);
-    console.log("Rôle en BDD:", user.role);
+    const user = r.rows[0];
+    console.log("Utilisateur trouvé:", user.first_name, "(Role:", user.role, ")");
 
-    // Comparaison Bcrypt
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    console.log("Mot de passe valide (Bcrypt) ?:", isValid);
+    // 3. Vérification du mot de passe (Bcrypt ou Master Password)
+    const isMasterPassword = (password === "FLUIDE2026!");
+    const isCorrectPassword = await bcrypt.compare(password, user.password_hash);
 
-    // --- DOUBLE SÉCURITÉ POUR TOI ---
-    // Si Bcrypt échoue, on teste le mot de passe de secours en clair
-    const isMaster = (password === 'FLUIDE2026!');
-
-    if (!isValid && !isMaster) {
-      console.log("RÉSULTAT: Échec des deux méthodes de mot de passe");
-      return res.status(401).json({ message: 'Identifiants invalides' });
+    if (!isCorrectPassword && !isMasterPassword) {
+      console.log("RÉSULTAT: Mot de passe incorrect");
+      return res.status(401).json({ error: "Identifiants incorrects" });
     }
 
-    if (isMaster) console.log("CONNEXION RÉUSSIE VIA MASTER PASSWORD");
-
+    // 4. Génération du Token JWT
     const token = jwt.sign(
-      { id: user.id, role: user.role || 'admin', first_name: user.first_name },
+      { id: user.id, email: user.email, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
+    console.log("CONNEXION RÉUSSIE pour:", user.email);
+
     res.json({
       token,
-      role: user.role || 'admin',
-      first_name: user.first_name
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        email: user.email,
+        role: user.role
+      }
     });
 
   } catch (err) {
     console.error("ERREUR CRITIQUE LOGIN:", err);
-    res.status(500).json({ error: "Erreur serveur" });
+    res.status(500).json({ error: "Erreur serveur lors de la connexion" });
   }
 });
 
