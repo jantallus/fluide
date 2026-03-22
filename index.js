@@ -115,13 +115,41 @@ app.post('/api/users', authenticateAdmin, async (req, res) => {
 });
 
 // --- CHANGEMENT DE RÔLE (URL SIMPLIFIÉE) ---
-app.patch('/api/users/:id/role', authenticateAdmin, async (req, res) => {
-  const { role } = req.body;
+app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
+  const { title, weight, flight_type_id, notes, status } = req.body;
+  const slotId = req.params.id;
+
   try {
-    await pool.query("UPDATE users SET role = $1 WHERE id = $2", [role, req.params.id]);
-    res.json({ success: true });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
+    // 1. On met à jour sans JAMAIS supprimer
+    const result = await pool.query(
+      `UPDATE slots 
+       SET title = $1, 
+           weight = $2, 
+           flight_type_id = $3, 
+           notes = $4, 
+           status = $5 
+       WHERE id = $6
+       RETURNING *`, // On demande à SQL de renvoyer le créneau mis à jour
+      [
+        title || null, 
+        weight ? parseInt(weight) : null, 
+        flight_type_id ? parseInt(flight_type_id) : null, 
+        notes || null, 
+        status || 'available', 
+        slotId
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Créneau introuvable" });
+    }
+
+    // 2. On renvoie le créneau complet au front pour qu'il ne disparaisse pas
+    res.json(result.rows[0]);
+    
+  } catch (err) {
+    console.error("ERREUR PATCH SLOT:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
