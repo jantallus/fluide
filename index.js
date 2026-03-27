@@ -8,13 +8,30 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 process.env.TZ = 'Europe/Paris'; 
+console.log("🚀 LE SERVEUR DÉMARRE VRAIMENT ICI !");
 
-// --- CONFIGURATION CORS RENFORCÉE (INDISPENSABLE) ---
+// --- CONFIGURATION CORS INTELLIGENTE ---
 app.use(cors({
-  origin: '*', // Permet à n'importe quel domaine (ton site) de contacter l'API
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  credentials: true
+  origin: function (origin, callback) {
+    // Liste des origines autorisées (votre futur site en ligne + les environnements de test)
+    const allowedOrigins = [
+      'http://localhost:3000', // Test local PC normal
+      'http://127.0.0.1:3000', 
+      'http://100.115.92.202:3000', // Test local Chromebook (Tailscale)
+      process.env.FRONTEND_URL
+    ];
+
+    // On autorise si l'origine est dans la liste, ou si c'est une requête locale sans origine (outils comme Postman)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`🛑 CORS bloqué pour l'origine : ${origin}`);
+      callback(new Error('Accès CORS non autorisé'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
@@ -26,39 +43,40 @@ const pool = new Pool({
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
-// --- MIDDLEWARE AUTH ---
-// index.js (Ligne ~30)
+// --- MIDDLEWARE AUTH (SÉCURITÉ ACTIVÉE 🔒) ---
 const authenticateAdmin = (req, res, next) => {
-  // --- TEST DE SURVIE : ON LAISSE TOUT PASSER ---
-  console.log("Passage forcé : Sécurité désactivée");
-  next(); 
-  
-  /* Ancien code (on le garde en commentaire pour plus tard) :
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Accès refusé" });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.role !== 'admin') return res.status(403).json({ message: "Interdit" });
-    req.user = decoded;
-    next();
-  } catch (err) {
-    return res.status(401).json({ message: "Token invalide" });
+  // 1. On cherche le badge (le token) que le navigateur est censé envoyer
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Format attendu : "Bearer LE_TOKEN"
+
+  // 2. Si pas de badge, on bloque à l'entrée
+  if (!token) {
+    console.log("⛔ Accès refusé : Aucun token fourni");
+    return res.status(401).json({ error: "Accès non autorisé (Token manquant)" });
   }
-  */
+
+  // 3. On vérifie si le badge est un vrai (fabriqué par notre serveur) et n'est pas périmé
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      console.log("⛔ Accès refusé : Token invalide ou expiré");
+      return res.status(403).json({ error: "Session expirée ou invalide. Veuillez vous reconnecter." });
+    }
+    
+    // 4. Le badge est bon ! On attache l'identité de la personne à la requête et on la laisse passer
+    req.user = user; 
+    next(); 
+  });
 };
 
-// --- AUTHENTIFICATION (CORRIGÉE SANS RIEN SUPPRIMER DU RESTE) ---
+// --- AUTHENTIFICATION ---
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   console.log("Tentative de connexion pour :", email);
   console.log("Email reçu:", email);
 
   try {
-    // 1. Recherche de l'utilisateur (on utilise 'r' comme nom de variable)
-    // Utilisation de LOWER pour éviter les problèmes de majuscules
     const r = await pool.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [email]);
 
-    // 2. Vérification si l'utilisateur existe
     if (r.rows.length === 0) {
       console.log("RÉSULTAT: Utilisateur non trouvé en BDD");
       return res.status(401).json({ error: "Identifiants incorrects" });
@@ -67,7 +85,6 @@ app.post('/api/login', async (req, res) => {
     const user = r.rows[0];
     console.log("Utilisateur trouvé:", user.first_name, "(Role:", user.role, ")");
 
-    // 3. Vérification du mot de passe (Bcrypt ou Master Password)
     const isMasterPassword = (password === "FLUIDE2026!");
     const isCorrectPassword = await bcrypt.compare(password, user.password_hash);
 
@@ -76,7 +93,6 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: "Identifiants incorrects" });
     }
 
-    // 4. Génération du Token JWT
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       JWT_SECRET,
@@ -87,12 +103,7 @@ app.post('/api/login', async (req, res) => {
 
     res.json({
       token,
-      user: {
-        id: user.id,
-        first_name: user.first_name,
-        email: user.email,
-        role: user.role
-      }
+      user: { id: user.id, first_name: user.first_name, email: user.email, role: user.role }
     });
 
   } catch (err) {
@@ -102,7 +113,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 // --- GESTION DES MONITEURS & USERS ---
-// --- CRÉATION UTILISATEUR (URL SIMPLIFIÉE) ---
 app.post('/api/users', authenticateAdmin, async (req, res) => {
   const { first_name, email, password, role, is_active_monitor } = req.body;
   try {
@@ -116,84 +126,32 @@ app.post('/api/users', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- CHANGEMENT DE RÔLE (URL SIMPLIFIÉE) ---
-app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, weight, flight_type_id, notes, status } = req.body;
-  const slotId = req.params.id;
-
-  try {
-    // 1. On met à jour sans JAMAIS supprimer
-    const result = await pool.query(
-      `UPDATE slots 
-       SET title = $1, 
-           weight = $2, 
-           flight_type_id = $3, 
-           notes = $4, 
-           status = $5 
-       WHERE id = $6
-       RETURNING *`, // On demande à SQL de renvoyer le créneau mis à jour
-      [
-        title || null, 
-        weight ? parseInt(weight) : null, 
-        flight_type_id ? parseInt(flight_type_id) : null, 
-        notes || null, 
-        status || 'available', 
-        slotId
-      ]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Créneau introuvable" });
-    }
-
-    // 2. On renvoie le créneau complet au front pour qu'il ne disparaisse pas
-    res.json(result.rows[0]);
-    
-  } catch (err) {
-    console.error("ERREUR PATCH SLOT:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT id, first_name, email, role, is_active_monitor, status 
       FROM users 
       WHERE role IN ('admin', 'permanent', 'monitor') 
-      ORDER BY 
-        CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, 
-        first_name ASC
+      ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, first_name ASC
     `);
     res.json(r.rows);
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/monitors', async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT id, first_name 
-      FROM users 
-      WHERE is_active_monitor = true 
-      AND status = 'Actif'
-      AND role IN ('admin', 'permanent', 'monitor')
+      SELECT id, first_name FROM users 
+      WHERE is_active_monitor = true AND status = 'Actif' AND role IN ('admin', 'permanent', 'monitor')
       ORDER BY first_name ASC
     `);
     res.json(r.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- SUPPRESSION UTILISATEUR (URL SIMPLIFIÉE) ---
 app.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
   try {
-    // req.user.id vient du token décodé (si sécurité activée)
-    if (req.user && req.user.id === req.params.id) {
-      return res.status(400).json({ error: "Interdit de supprimer son propre compte." });
-    }
+    if (req.user && req.user.id === req.params.id) return res.status(400).json({ error: "Interdit de supprimer son propre compte." });
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -208,35 +166,35 @@ app.get('/api/flight-types', async (req, res) => {
 });
 
 app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
-  const flightSeason = season || 'ALL'; // Par défaut, valable toute l'année
+  const flightSeason = season || 'Standard'; 
   
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason]
+      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
-  const flightSeason = season || 'ALL';
+  const flightSeason = season || 'Standard';
 
   try {
     await pool.query(
       `UPDATE flight_types 
-       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8 
-       WHERE id = $9`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, req.params.id]
+       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9 
+       WHERE id = $10`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -285,80 +243,243 @@ app.get('/api/slots', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Fusion propre des deux anciens app.patch('/api/slots/:id')
 app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
-  const { title, notes, status, flight_type_id, weight, monitor_id } = req.body;
+  const { title, weight, flight_type_id, notes, status, monitor_id } = req.body;
+  const slotId = req.params.id;
+
   try {
-    await pool.query(
-      "UPDATE slots SET title = $1, notes = $2, status = $3, flight_type_id = $4, weight = $5, monitor_id = $6 WHERE id = $7",
-      [title, notes, status, flight_type_id, weight, monitor_id, req.params.id]
+    const result = await pool.query(
+      `UPDATE slots 
+       SET title = $1, 
+           weight = $2, 
+           flight_type_id = $3, 
+           notes = $4, 
+           status = $5,
+           monitor_id = COALESCE($6, monitor_id)
+       WHERE id = $7
+       RETURNING *`, 
+      [
+        title !== undefined ? title : null, 
+        weight ? parseInt(weight) : null, 
+        flight_type_id ? parseInt(flight_type_id) : null, 
+        notes !== undefined ? notes : null, 
+        status || 'available', 
+        monitor_id ? parseInt(monitor_id) : null,
+        slotId
+      ]
     );
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    if (result.rows.length === 0) return res.status(404).json({ error: "Créneau introuvable" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("ERREUR PATCH SLOT:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
+// --- GÉNÉRATION HERMÉTIQUE DES CRÉNEAUX (VERSION TURBO) ---
 app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
-  const { startDate, endDate, daysToApply } = req.body;
+  const { startDate, endDate, daysToApply, plan_name } = req.body;
+  const plan = plan_name || 'Standard';
   const client = await pool.connect();
+  
   try {
     await client.query('BEGIN');
-    // On nettoie l'existant sur la période
+    
+    // 1. On nettoie l'ancien planning
     await client.query(`DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2`, [startDate, endDate]);
     
-    const defs = await client.query('SELECT * FROM slot_definitions');
+    // 2. On récupère les modèles et les moniteurs
+    const defs = await client.query("SELECT * FROM slot_definitions WHERE COALESCE(plan_name, 'Standard') = $1", [plan]);
     const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    
     let curr = new Date(startDate);
     const last = new Date(endDate);
+    
+    // --- LA MAGIE EST ICI : On prépare le gros camion ---
+    const values = [];
+    const placeholders = [];
+    let paramIndex = 1;
+
     while (curr <= last) {
       const activeDays = daysToApply.map(Number);
       if (activeDays.includes(curr.getDay())) {
         const dateStr = curr.getFullYear() + '-' + String(curr.getMonth() + 1).padStart(2, '0') + '-' + String(curr.getDate()).padStart(2, '0');
+        
         for (const d of defs.rows) {
           for (const m of mons.rows) {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
-            await client.query(`
-              INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-              VALUES ($1, $2::timestamp, $2::timestamp + ($3 || ' minutes')::interval, $4, $5)
-            `, [m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null]);
+            
+            // On prépare le texte ($1, $2, $3...)
+            placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
+            
+            // On prépare les données réelles
+            values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
+            
+            paramIndex += 5; // On avance de 5 car on a 5 colonnes
           }
         }
       }
       curr.setDate(curr.getDate() + 1);
     }
+
+    // 3. On envoie TOUT d'un seul coup (si on a des créneaux à créer)
+    if (placeholders.length > 0) {
+      const query = `
+        INSERT INTO slots (monitor_id, start_time, end_time, status, title)
+        VALUES ${placeholders.join(', ')}
+      `;
+      await client.query(query, values);
+    }
+
     await client.query('COMMIT');
+    console.log(`✅ GÉNÉRATION TURBO RÉUSSIE : ${placeholders.length} créneaux créés d'un coup !`);
     res.json({ success: true });
+    
   } catch (e) {
     await client.query('ROLLBACK');
+    console.error("❌ ERREUR GÉNÉRATION :", e.message);
     res.status(500).json({ error: e.message });
-  } finally { client.release(); }
+  } finally { 
+    client.release(); 
+  }
 });
 
-// --- CONFIGURATION DES ROTATIONS (SLOT DEFINITIONS) ---
+// --- CONFIGURATION DES ROTATIONS (HERMÉTIQUES) ---
+app.get('/api/slot-definitions', async (req, res) => {
+  console.log("📥 REQUÊTE REÇUE ! Tentative de lecture SQL..."); // Si tu vois ça, le lien est 100% OK
+  try {
+    const { plan } = req.query;
+    
+    // On teste une requête ultra simple d'abord
+    const query = 'SELECT * FROM slot_definitions ORDER BY start_time ASC';
+    const result = await pool.query(query);
+    
+    console.log(`✅ SQL Réussi : ${result.rows.length} lignes trouvées.`);
+    res.json(result.rows);
+  } catch (err) {
+    // C'EST ICI QUE LE SERVEUR VA ENFIN PARLER
+    console.error("❌ ERREUR CRITIQUE DANS LA ROUTE :");
+    console.error("Message :", err.message);
+    console.error("Code erreur :", err.code);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 1. Récupérer les créneaux (GET)
 app.get('/api/slot-definitions', async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM slot_definitions ORDER BY start_time ASC');
-    res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { plan } = req.query;
+    console.log("📥 GET reçu pour le plan:", plan);
+    
+    const query = plan 
+      ? 'SELECT * FROM slot_definitions WHERE plan_name = $1 ORDER BY start_time' 
+      : 'SELECT * FROM slot_definitions ORDER BY start_time';
+    const params = plan ? [plan] : [];
+
+    const result = await pool.query(query, params);
+    console.log(`✅ ${result.rows.length} créneaux trouvés.`);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ ERREUR GET SLOTS:", err.message); // ICI ça va parler !
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Sauvegarder les créneaux (POST) - C'est celle qui manquait (d'où le 404)
+app.get('/api/slot-definitions', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM slot_definitions ORDER BY start_time');
+    res.json(result.rows);
+  } catch (err) {
+    // CE LOG EST INDISPENSABLE POUR SAVOIR CE QUI CLOCHE
+    console.error("DEBUG SQL ERROR:", err.message); 
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
-  const { start_time, duration_minutes, label } = req.body;
   try {
-    const [h, m] = start_time.split(':').map(Number);
-    const newStart = h * 60 + m;
-    const newEnd = newStart + parseInt(duration_minutes);
-    const existing = await pool.query('SELECT start_time, duration_minutes, label FROM slot_definitions');
-    for (let row of existing.rows) {
-      const [exH, exM] = row.start_time.split(':').map(Number);
-      const exStart = exH * 60 + exM;
-      const exEnd = exStart + row.duration_minutes;
-      if (newStart < exEnd && newEnd > exStart) {
-        return res.status(400).json({ error: `Conflit avec la rotation "${row.label}" (${row.start_time})` });
-      }
-    }
-    const r = await pool.query('INSERT INTO slot_definitions (start_time, duration_minutes, label) VALUES ($1, $2, $3) RETURNING *', [start_time, duration_minutes, label]);
+    const { start_time, duration_minutes, label, plan_name } = req.body;
+    console.log("📥 Requête POST reçue pour enregistrer :", req.body);
+
+    const r = await pool.query(
+      `INSERT INTO slot_definitions (start_time, duration_minutes, label, plan_name) 
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [start_time, duration_minutes, label, plan_name || 'Standard']
+    );
+    
+    console.log("✅ Créneau enregistré avec succès !");
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error("❌ ERREUR POST SLOTS:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+  const { start_time, duration_minutes, label, plan_name } = req.body;
+  const plan = plan_name || 'Standard';
+  const { id } = req.params;
+  try {
+    await pool.query(
+      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3, plan_name = $4 WHERE id = $5',
+      [start_time, duration_minutes, label, plan, id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Supprimer un créneau (DELETE)
+app.delete('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`🗑️ Requête reçue pour supprimer le créneau ID : ${id}`);
+    
+    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [id]);
+    
+    console.log("✅ Créneau supprimé avec succès !");
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ ERREUR DELETE SLOT:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- GESTION DES PLANS ---
+
+// 1. Renommer un plan entier
+app.put('/api/plans/:oldName', authenticateAdmin, async (req, res) => {
+  try {
+    const { oldName } = req.params;
+    const { newName } = req.body;
+    console.log(`✏️ Renommage du plan ${oldName} en ${newName}`);
+    
+    await pool.query(
+      'UPDATE slot_definitions SET plan_name = $1 WHERE plan_name = $2',
+      [newName, oldName]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Supprimer un plan entier (et toutes ses rotations)
+app.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
+  try {
+    const { name } = req.params;
+    console.log(`🗑️ Suppression complète du plan ${name}`);
+    
+    await pool.query('DELETE FROM slot_definitions WHERE plan_name = $1', [name]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- CLIENTS ---
@@ -366,10 +487,7 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC, first_name ASC');
     res.json(r.rows);
-  } catch (err) {
-    console.error("Erreur GET /api/clients:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- BONS CADEAUX ---
@@ -394,10 +512,7 @@ app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
       [code, parseInt(flight_type_id), buyer_name, beneficiary_name, parseInt(price_paid_cents), notes || null]
     );
     res.json(r.rows[0]);
-  } catch (err) { 
-    console.error(err);
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/gift-cards/check/:code', async (req, res) => {
@@ -455,20 +570,16 @@ app.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
       upcoming: upcoming.rows
     });
   } catch (err) {
-    console.error("Erreur Dashboard:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- CONFIGURATION : SAISON (Dates de début et fin) ---
+// --- SETTINGS (SAISONS ET PÉRIODES) ---
 app.get('/api/settings', async (req, res) => {
   try {
     const r = await pool.query('SELECT key, value FROM site_settings');
-    // Renvoie un tableau [{key: 'season_start', value: '...'}, ...]
     res.json(r.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/settings', authenticateAdmin, async (req, res) => {
@@ -480,40 +591,12 @@ app.post('/api/settings', authenticateAdmin, async (req, res) => {
       [key, value]
     );
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- CONFIGURATION : MODIFIER UNE ROTATION EXISTANTE (PUT) ---
-app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
-  const { start_time, duration_minutes, label } = req.body;
-  const { id } = req.params;
-  try {
-    await pool.query(
-      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3 WHERE id = $4',
-      [start_time, duration_minutes, label, id]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- COMPLÉMENTS (OPTIONS SUPPLÉMENTAIRES) ---
-app.get('/api/complements', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
-    res.json(r.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- STATISTIQUES GLOBALES ---
 app.get('/api/stats', authenticateAdmin, async (req, res) => {
   try {
-    // 1. Calcul du CA global et nombre de vols
     const summaryResult = await pool.query(`
       SELECT 
         COALESCE(SUM(ft.price_cents), 0) as total_revenue,
@@ -523,7 +606,6 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
       WHERE s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL)
     `);
 
-    // 2. Liste des sessions à venir (pour le tableau)
     const upcomingResult = await pool.query(`
       SELECT 
         s.id, s.start_time, s.title as client_name, 
@@ -550,5 +632,5 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
 });
 
 // --- DÉMARRAGE ---
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, '0.0.0.0', () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
