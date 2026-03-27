@@ -13,15 +13,14 @@ console.log("🚀 LE SERVEUR DÉMARRE VRAIMENT ICI !");
 // --- CONFIGURATION CORS INTELLIGENTE ---
 app.use(cors({
   origin: function (origin, callback) {
-    // Liste des origines autorisées (votre futur site en ligne + les environnements de test)
     const allowedOrigins = [
-      'http://localhost:3000', // Test local PC normal
+      'http://localhost:3000', 
       'http://127.0.0.1:3000', 
-      'http://100.115.92.202:3000', // Test local Chromebook (Tailscale)
-      process.env.FRONTEND_URL
+      'http://100.115.92.202:3000', 
+      'https://fluide-frontend-production.up.railway.app', // <-- LE PASS VIP EST LÀ !
+      process.env.FRONTEND_URL 
     ];
 
-    // On autorise si l'origine est dans la liste, ou si c'est une requête locale sans origine (outils comme Postman)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
