@@ -289,26 +289,52 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   }
 });
 
-// --- GÉNÉRATION HERMÉTIQUE DES CRÉNEAUX (VERSION TURBO) ---
+// --- GÉNÉRATION HERMÉTIQUE DES CRÉNEAUX (VERSION TURBO + SÉCURITÉ) ---
 app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
-  const { startDate, endDate, daysToApply, plan_name } = req.body;
+  const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
     
-    // 1. On nettoie l'ancien planning
-    await client.query(`DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2`, [startDate, endDate]);
+    // 1. Préparation des filtres si on cible UN SEUL moniteur
+    let monitorFilterDelete = '';
+    let monitorFilterSelect = '';
+    const paramsSelect = [];
+    const paramsDelete = [startDate, endDate];
+
+    if (monitor_id && monitor_id !== 'all') {
+        monitorFilterDelete = ' AND monitor_id = $3';
+        paramsDelete.push(monitor_id);
+        monitorFilterSelect = ' AND id = $1';
+        paramsSelect.push(monitor_id);
+    }
+
+    // 2. LE RADAR ANTI-ÉCRASEMENT : On vérifie les réservations
+    if (!forceOverwrite) {
+        const checkQuery = `SELECT COUNT(*) FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'booked' ${monitorFilterDelete}`;
+        const check = await client.query(checkQuery, paramsDelete);
+
+        if (parseInt(check.rows[0].count) > 0) {
+            await client.query('ROLLBACK'); // On annule tout
+            return res.status(409).json({
+                warning: true,
+                message: `⚠️ ATTENTION : Il y a ${check.rows[0].count} vol(s) déjà réservé(s) sur cette période pour la sélection. Voulez-vous VRAIMENT tout écraser ?`
+            });
+        }
+    }
     
-    // 2. On récupère les modèles et les moniteurs
+    // 3. On nettoie l'ancien planning (soit pour tout le monde, soit pour le moniteur ciblé)
+    await client.query(`DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ${monitorFilterDelete}`, paramsDelete);
+    
+    // 4. On récupère les modèles et les moniteurs ciblés
     const defs = await client.query("SELECT * FROM slot_definitions WHERE COALESCE(plan_name, 'Standard') = $1", [plan]);
-    const mons = await client.query("SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    const mons = await client.query(`SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif' ${monitorFilterSelect}`, paramsSelect);
     
     let curr = new Date(startDate);
     const last = new Date(endDate);
     
-    // --- LA MAGIE EST ICI : On prépare le gros camion ---
     const values = [];
     const placeholders = [];
     let paramIndex = 1;
@@ -323,20 +349,16 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
             
-            // On prépare le texte ($1, $2, $3...)
             placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
-            
-            // On prépare les données réelles
             values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
             
-            paramIndex += 5; // On avance de 5 car on a 5 colonnes
+            paramIndex += 5; 
           }
         }
       }
       curr.setDate(curr.getDate() + 1);
     }
 
-    // 3. On envoie TOUT d'un seul coup (si on a des créneaux à créer)
     if (placeholders.length > 0) {
       const query = `
         INSERT INTO slots (monitor_id, start_time, end_time, status, title)
@@ -346,8 +368,7 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     }
 
     await client.query('COMMIT');
-    console.log(`✅ GÉNÉRATION TURBO RÉUSSIE : ${placeholders.length} créneaux créés d'un coup !`);
-    res.json({ success: true });
+    res.json({ success: true, count: placeholders.length });
     
   } catch (e) {
     await client.query('ROLLBACK');
