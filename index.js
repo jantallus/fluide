@@ -674,6 +674,28 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
   }
 });
 
+// --- API PUBLIQUE (SÉCURISÉE POUR LES CLIENTS) ---
+app.get('/api/public/availabilities', async (req, res) => {
+  const { date } = req.query; // Format attendu : YYYY-MM-DD
+  try {
+    if (!date) return res.status(400).json({ error: "Date requise" });
+
+    // 🛑 SÉCURITÉ ABSOLUE : On ne sélectionne que l'ID, les heures, le statut et l'ID du moniteur. 
+    // AUCUN NOM DE CLIENT (title) NI NOTE NE SORT D'ICI !
+    const r = await pool.query(`
+      SELECT id, start_time, end_time, status, monitor_id 
+      FROM slots 
+      WHERE start_time::date = $1
+      ORDER BY start_time ASC
+    `, [date]);
+    
+    res.json(r.rows);
+  } catch (err) { 
+    console.error("Erreur API Publique :", err);
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
 // --- DÉMARRAGE ---
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
