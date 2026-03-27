@@ -311,16 +311,27 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
         paramsSelect.push(monitor_id);
     }
 
-    // 2. LE RADAR ANTI-ÉCRASEMENT : On vérifie les réservations
+    // 2. LE RADAR ANTI-ÉCRASEMENT : On vérifie les réservations, notes et indispos
     if (!forceOverwrite) {
-        const checkQuery = `SELECT COUNT(*) FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 AND status = 'booked' ${monitorFilterDelete}`;
+        // La requête ignore les créneaux vides et les "☕ PAUSE", mais attrape tout le reste (Noms, NOTES, NON DISPO, etc.)
+        const checkQuery = `
+          SELECT COUNT(*) FROM slots 
+          WHERE start_time::date >= $1 
+          AND start_time::date <= $2 
+          AND (
+            (title IS NOT NULL AND title != '' AND title != '☕ PAUSE') 
+            OR 
+            (notes IS NOT NULL AND trim(notes) != '')
+          )
+          ${monitorFilterDelete}
+        `;
         const check = await client.query(checkQuery, paramsDelete);
 
         if (parseInt(check.rows[0].count) > 0) {
             await client.query('ROLLBACK'); // On annule tout
             return res.status(409).json({
                 warning: true,
-                message: `⚠️ ATTENTION : Il y a ${check.rows[0].count} vol(s) déjà réservé(s) sur cette période pour la sélection. Voulez-vous VRAIMENT tout écraser ?`
+                message: `⚠️ ATTENTION : Il y a ${check.rows[0].count} réservation(s) ou note(s) importante(s) sur cette période. Voulez-vous VRAIMENT tout écraser ?`
             });
         }
     }
