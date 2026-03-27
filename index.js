@@ -42,28 +42,40 @@ const pool = new Pool({
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
-// --- MIDDLEWARE AUTH (SÉCURITÉ ACTIVÉE 🔒) ---
-const authenticateAdmin = (req, res, next) => {
-  // 1. On cherche le badge (le token) que le navigateur est censé envoyer
+// --- VRAIE SÉCURITÉ BACKEND 🔒 ---
+
+// 1. Pour les actions basiques (Ex: un moniteur qui modifie un créneau)
+const authenticateUser = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Format attendu : "Bearer LE_TOKEN"
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.status(401).json({ error: "Accès refusé" });
 
-  // 2. Si pas de badge, on bloque à l'entrée
-  if (!token) {
-    console.log("⛔ Accès refusé : Aucun token fourni");
-    return res.status(401).json({ error: "Accès non autorisé (Token manquant)" });
-  }
-
-  // 3. On vérifie si le badge est un vrai (fabriqué par notre serveur) et n'est pas périmé
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      console.log("⛔ Accès refusé : Token invalide ou expiré");
-      return res.status(403).json({ error: "Session expirée ou invalide. Veuillez vous reconnecter." });
+    if (err) return res.status(403).json({ error: "Session invalide" });
+    req.user = user;
+    next();
+  });
+};
+
+// 2. Pour les actions sensibles (Ex: Créer un admin, modifier les configurations)
+const authenticateAdmin = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.status(401).json({ error: "Accès refusé" });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: "Session invalide" });
+    
+    // Le blocage absolu est ici :
+    if (user.role !== 'admin') {
+      console.log(`🚨 Tentative de piratage bloquée pour : ${user.email}`);
+      return res.status(403).json({ error: "Interdit : Droits administrateur requis." });
     }
     
-    // 4. Le badge est bon ! On attache l'identité de la personne à la requête et on la laisse passer
-    req.user = user; 
-    next(); 
+    req.user = user;
+    next();
   });
 };
 
@@ -243,7 +255,7 @@ app.get('/api/slots', async (req, res) => {
 });
 
 // Fusion propre des deux anciens app.patch('/api/slots/:id')
-app.patch('/api/slots/:id', authenticateAdmin, async (req, res) => {
+app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   const { title, weight, flight_type_id, notes, status, monitor_id } = req.body;
   const slotId = req.params.id;
 
