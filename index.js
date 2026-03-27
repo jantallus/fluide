@@ -137,7 +137,7 @@ app.post('/api/users', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/monitors-admin', authenticateAdmin, async (req, res) => {
+app.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT id, first_name, email, role, is_active_monitor, status 
