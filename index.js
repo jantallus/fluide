@@ -39,6 +39,10 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
+// Le filet de sécurité anti-crash :
+pool.on('error', (err, client) => {
+  console.error('Erreur inattendue du réseau de la base de données:', err.message);
+});
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
@@ -187,7 +191,7 @@ app.get('/api/flight-types', async (req, res) => {
 });
 
 app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -195,16 +199,16 @@ app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
   
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110]
+      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -213,9 +217,9 @@ app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(
       `UPDATE flight_types 
-       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9, weight_min = $10, weight_max = $11 
-       WHERE id = $12`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, req.params.id]
+       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9, weight_min = $10, weight_max = $11, booking_delay_hours = $12 
+       WHERE id = $13`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -496,7 +500,7 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- BONS CADEAUX ---
+// 1. AFFICHER TOUS LES BONS ET PROMOS (Espace Admin)
 app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -508,36 +512,68 @@ app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 2. CRÉER UN BON OU UNE PROMO (Espace Admin)
+// 2. CRÉER UN BON OU UNE PROMO (Espace Admin)
 app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
-  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes } = req.body;
-  const code = "FL-" + Math.random().toString(36).substring(2, 7).toUpperCase();
+  const { 
+    flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes,
+    type, discount_type, discount_value, custom_code,
+    max_uses, valid_from, valid_until, discount_scope
+  } = req.body;
+
   try {
+    const finalCode = custom_code ? custom_code.toUpperCase().replace(/\s+/g, '-') : `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
     const r = await pool.query(
-      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, status) 
-       VALUES ($1, $2, $3, $4, $5, $6, 'valid') RETURNING *`,
-      [code, parseInt(flight_type_id), buyer_name, beneficiary_name, parseInt(price_paid_cents), notes || null]
+      `INSERT INTO gift_cards 
+      (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, max_uses, valid_from, valid_until, status, discount_scope) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'valid', $13) RETURNING *`,
+      [
+        finalCode, 
+        flight_type_id || null, 
+        buyer_name || null, 
+        beneficiary_name || null, 
+        price_paid_cents || 0, 
+        notes || '',
+        type || 'gift_card',
+        discount_type || null,
+        discount_value || null,
+        max_uses || null,
+        valid_from || null,
+        valid_until || null,
+        discount_scope || 'both'
+      ]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: "Ce code personnalisé existe déjà." });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
+// SUPPRIMER UN CODE OU UN BON
+app.delete('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM gift_cards WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
+// 3. VÉRIFIER UN CODE (Côté Client, au moment du panier)
 app.get('/api/gift-cards/check/:code', async (req, res) => {
   try {
     const r = await pool.query(
+      // ATTENTION ICI : On utilise bien LEFT JOIN pour accepter les promos sans vol associé
       `SELECT gc.*, ft.name as flight_name FROM gift_cards gc 
-       JOIN flight_types ft ON gc.flight_type_id = ft.id 
+       LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id 
        WHERE UPPER(gc.code) = UPPER($1) AND gc.status = 'valid'`, [req.params.code]
     );
     if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
-  const { status } = req.body;
-  try {
-    await pool.query("UPDATE gift_cards SET status = $1 WHERE id = $2", [status, req.params.id]);
-    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -660,55 +696,189 @@ app.get('/api/public/availabilities', async (req, res) => {
 // --- API PUBLIQUE : PAIEMENT STRIPE ---
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
+// 🛠️ FONCTION MAGIQUE : Effectue la réservation dans la BDD (utilisée pour les 0€ et après Stripe)
+async function performBooking(client, contact, passengers) {
+  for (const p of passengers) {
+    const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
+    const flight = flightRes.rows[0];
+    const flightDur = flight.duration_minutes || 15;
+
+    const slotsRes = await client.query(`
+      SELECT * FROM slots 
+      WHERE start_time::date = $1 AND status = 'available' 
+      ORDER BY start_time ASC
+    `, [p.date]);
+    
+    const availableSlots = slotsRes.rows;
+    
+    let baseDur = 15;
+    if (availableSlots.length > 0) {
+      const s1 = new Date(availableSlots[0].start_time).getTime();
+      const e1 = new Date(availableSlots[0].end_time).getTime();
+      baseDur = Math.round((e1 - s1) / 60000) || 15;
+    }
+    const slotsNeeded = Math.ceil(flightDur / baseDur);
+
+    const monSchedules = {};
+    availableSlots.forEach(s => {
+      if (!monSchedules[s.monitor_id]) monSchedules[s.monitor_id] = [];
+      monSchedules[s.monitor_id].push(s);
+    });
+
+    let chosenMonitor = null;
+    let slotsToBook = [];
+
+    for (const monId of Object.keys(monSchedules)) {
+      const monSlots = monSchedules[monId].sort((a,b) => new Date(a.start_time) - new Date(b.start_time));
+      
+      let startIndex = -1;
+      for (let i = 0; i < monSlots.length; i++) {
+         const d = new Date(monSlots[i].start_time);
+         const tStr = d.toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
+         if (tStr === p.time) { startIndex = i; break; }
+      }
+
+      if (startIndex !== -1 && startIndex + slotsNeeded <= monSlots.length) {
+          let isValid = true;
+          let sequence = [monSlots[startIndex]];
+          
+          for (let i = 1; i < slotsNeeded; i++) {
+              const prevEnd = new Date(monSlots[startIndex + i - 1].end_time).getTime();
+              const currStart = new Date(monSlots[startIndex + i].start_time).getTime();
+              if (Math.abs(currStart - prevEnd) > 60000) { isValid = false; break; }
+              sequence.push(monSlots[startIndex + i]);
+          }
+
+          if (isValid) {
+              chosenMonitor = monId;
+              slotsToBook = sequence;
+              break; 
+          }
+      }
+    }
+
+    if (!chosenMonitor) throw new Error(`Plus de moniteur dispo pour ${p.firstName} à ${p.time}`);
+
+    let optionsNames = [];
+    if (p.selectedComplements && p.selectedComplements.length > 0) {
+      for (const compId of p.selectedComplements) {
+        const compRes = await client.query('SELECT name FROM complements WHERE id = $1', [compId]);
+        if (compRes.rows[0]) optionsNames.push(compRes.rows[0].name);
+      }
+    }
+    const bookingOptions = optionsNames.length > 0 ? optionsNames.join(', ') : null;
+    const clientMessage = contact.notes ? contact.notes : null;
+
+    let isFirstSlot = true;
+    for (const slot of slotsToBook) {
+      const slotTitle = isFirstSlot ? `${flight.name} - ${p.firstName}` : `↪️ Suite ${flight.name} - ${p.firstName}`;
+      const slotNotes = isFirstSlot ? null : 'Extension auto';
+
+      await client.query(`
+        UPDATE slots 
+        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7
+        WHERE id = $2
+      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes]);
+      
+      const index = availableSlots.findIndex(s => s.id === slot.id);
+      if(index > -1) availableSlots.splice(index, 1);
+      isFirstSlot = false;
+    }
+  } 
+}
+
+// 🛒 CRÉATION DE LA SESSION DE PAIEMENT (Ou réservation directe si 0€)
 app.post('/api/public/checkout', async (req, res) => {
-  const { contact, passengers } = req.body;
+  const { contact, passengers, voucher_code } = req.body;
+  const client = await pool.connect();
 
   try {
+    // 1. Calculer le total (en séparant Vols et Options)
+    let flightTotalCents = 0;
+    let complementsTotalCents = 0;
     const line_items = [];
 
     for (const p of passengers) {
-      const flightRes = await pool.query('SELECT name, price_cents FROM flight_types WHERE id = $1', [p.flightId]);
+      const flightRes = await client.query('SELECT name, price_cents FROM flight_types WHERE id = $1', [p.flightId]);
       const flight = flightRes.rows[0];
-
       if (flight) {
+        flightTotalCents += flight.price_cents;
         line_items.push({
-          price_data: {
-            currency: 'eur',
-            product_data: { 
-              name: `Vol ${flight.name}`,
-              description: `Passager: ${p.firstName} - Le ${p.date} à ${p.time}` 
-            },
-            unit_amount: flight.price_cents,
-          },
-          quantity: 1,
+          price_data: { currency: 'eur', product_data: { name: `Vol ${flight.name}`, description: `Passager: ${p.firstName} - Le ${p.date} à ${p.time}` }, unit_amount: flight.price_cents }, quantity: 1
         });
       }
-
       if (p.selectedComplements && p.selectedComplements.length > 0) {
         for (const compId of p.selectedComplements) {
-          const compRes = await pool.query('SELECT name, price_cents FROM complements WHERE id = $1', [compId]);
+          const compRes = await client.query('SELECT name, price_cents FROM complements WHERE id = $1', [compId]);
           const comp = compRes.rows[0];
-          
           if (comp) {
+            complementsTotalCents += comp.price_cents;
             line_items.push({
-              price_data: {
-                currency: 'eur',
-                product_data: { name: `Option: ${comp.name} (pour ${p.firstName})` },
-                unit_amount: comp.price_cents,
-              },
-              quantity: 1,
+              price_data: { currency: 'eur', product_data: { name: `Option: ${comp.name} (pour ${p.firstName})` }, unit_amount: comp.price_cents }, quantity: 1
             });
           }
         }
       }
     }
 
+    let originalPriceCents = flightTotalCents + complementsTotalCents;
+
+    // 2. Vérification du Code Promo intelligent
+    let discountAmountCents = 0;
+    let appliedVoucher = null;
+
+    if (voucher_code) {
+      const vRes = await client.query(`SELECT * FROM gift_cards WHERE UPPER(code) = UPPER($1) AND status = 'valid'`, [voucher_code]);
+      if (vRes.rows.length > 0) {
+        appliedVoucher = vRes.rows[0];
+        if (appliedVoucher.type === 'gift_card') {
+          discountAmountCents = appliedVoucher.price_paid_cents;
+        } else if (appliedVoucher.type === 'promo') {
+          const scope = appliedVoucher.discount_scope || 'both';
+          let targetAmountCents = originalPriceCents;
+          
+          if (scope === 'flight') targetAmountCents = flightTotalCents;
+          if (scope === 'complements') targetAmountCents = complementsTotalCents;
+
+          if (appliedVoucher.discount_type === 'fixed') {
+             discountAmountCents = Math.min(appliedVoucher.discount_value * 100, targetAmountCents); // On ne peut pas réduire plus que le prix de la cible !
+          }
+          if (appliedVoucher.discount_type === 'percentage') {
+             discountAmountCents = Math.round(targetAmountCents * (appliedVoucher.discount_value / 100));
+          }
+        }
+      }
+    }
+
+    const finalPriceCents = Math.max(0, originalPriceCents - discountAmountCents);
+
+    // 🏆 CAS MAGIQUE : Le panier est de 0€, on contourne Stripe !
+    if (finalPriceCents === 0) {
+      await client.query('BEGIN');
+      await performBooking(client, contact, passengers);
+      
+      if (appliedVoucher) {
+        await client.query(`
+          UPDATE gift_cards 
+          SET current_uses = current_uses + 1,
+              status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END
+          WHERE id = $1
+        `, [appliedVoucher.id]);
+      }
+      
+      await client.query('COMMIT');
+      // On renvoie un "faux" lien de session qui dirige direct sur la page succès
+      return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}` });
+    }
+
+    // 💳 CAS NORMAL : Paiement Stripe
     const passengersJson = JSON.stringify(passengers);
     const metadata = {
       contact_name: `${contact.firstName} ${contact.lastName}`.substring(0, 500),
       contact_phone: contact.phone ? String(contact.phone).substring(0, 500) : '',
       contact_email: contact.email ? String(contact.email).substring(0, 500) : '',
-      contact_notes: contact.notes ? contact.notes.substring(0, 450) : ''
+      contact_notes: contact.notes ? contact.notes.substring(0, 450) : '',
+      voucher_code: appliedVoucher ? appliedVoucher.code : '' // On sauvegarde le code utilisé !
     };
 
     const chunkSize = 500;
@@ -716,7 +886,7 @@ app.post('/api/public/checkout', async (req, res) => {
       metadata[`passengers_chunk_${Math.floor(i / chunkSize)}`] = passengersJson.substring(i, i + chunkSize);
     }
 
-    const session = await stripe.checkout.sessions.create({
+    const sessionConfig = {
       payment_method_types: ['card'],
       customer_email: contact.email,
       line_items: line_items,
@@ -724,13 +894,28 @@ app.post('/api/public/checkout', async (req, res) => {
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reserver`,
       metadata: metadata 
-    });
+    };
 
+    // Création d'un "Coupon Stripe" temporaire : On utilise TOUJOURS le montant exact calculé par notre serveur !
+    if (appliedVoucher && discountAmountCents > 0) {
+      const coupon = await stripe.coupons.create({ 
+        amount_off: discountAmountCents, 
+        currency: 'eur', 
+        duration: 'once', 
+        name: `Réduction (${appliedVoucher.code})` 
+      });
+      sessionConfig.discounts = [{ coupon: coupon.id }];
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionConfig);
     res.json({ url: session.url });
 
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error("Erreur Checkout Stripe:", err);
     res.status(500).json({ error: "Erreur lors de l'initialisation du paiement." });
+  } finally {
+    client.release();
   }
 });
 
@@ -738,6 +923,10 @@ app.post('/api/public/checkout', async (req, res) => {
 app.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
+
+  if (session_id.startsWith('GRATUIT_')) {
+      return res.json({ success: true, message: "Réservation validée via code 100%" });
+    }
 
   const client = await pool.connect(); 
 
@@ -747,10 +936,11 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       return res.status(400).json({ error: "Le paiement n'a pas abouti." });
     }
 
-    const contactName = session.metadata.contact_name;
-    const contactPhone = session.metadata.contact_phone;
-    const contactEmail = session.metadata.contact_email;
-    const contactNotes = session.metadata.contact_notes;
+    const contact = {
+      phone: session.metadata.contact_phone,
+      email: session.metadata.contact_email,
+      notes: session.metadata.contact_notes
+    };
 
     let passengersJson = '';
     let chunkIndex = 0;
@@ -761,123 +951,20 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     const passengers = JSON.parse(passengersJson);
 
     await client.query('BEGIN'); 
+    
+    // 1. On réserve les créneaux
+    await performBooking(client, contact, passengers);
 
-    for (const p of passengers) {
-      const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
-      const flight = flightRes.rows[0];
-      const flightDur = flight.duration_minutes || 15;
-
-      const slotsRes = await client.query(`
-        SELECT * FROM slots 
-        WHERE start_time::date = $1 AND status = 'available' 
-        ORDER BY start_time ASC
-      `, [p.date]);
-      
-      const availableSlots = slotsRes.rows;
-      
-      let baseDur = 15;
-      if (availableSlots.length > 0) {
-        const s1 = new Date(availableSlots[0].start_time).getTime();
-        const e1 = new Date(availableSlots[0].end_time).getTime();
-        baseDur = Math.round((e1 - s1) / 60000) || 15;
-      }
-      const slotsNeeded = Math.ceil(flightDur / baseDur);
-
-      const monSchedules = {};
-      availableSlots.forEach(s => {
-        if (!monSchedules[s.monitor_id]) monSchedules[s.monitor_id] = [];
-        monSchedules[s.monitor_id].push(s);
-      });
-
-      let chosenMonitor = null;
-      let slotsToBook = [];
-
-      for (const monId of Object.keys(monSchedules)) {
-        const monSlots = monSchedules[monId].sort((a,b) => new Date(a.start_time) - new Date(b.start_time));
-        
-        let startIndex = -1;
-        for (let i = 0; i < monSlots.length; i++) {
-           const d = new Date(monSlots[i].start_time);
-           const tStr = d.toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
-           if (tStr === p.time) {
-               startIndex = i;
-               break;
-           }
-        }
-
-        if (startIndex !== -1 && startIndex + slotsNeeded <= monSlots.length) {
-            let isValid = true;
-            let sequence = [monSlots[startIndex]];
-            
-            for (let i = 1; i < slotsNeeded; i++) {
-                const prevEnd = new Date(monSlots[startIndex + i - 1].end_time).getTime();
-                const currStart = new Date(monSlots[startIndex + i].start_time).getTime();
-                
-                if (Math.abs(currStart - prevEnd) > 60000) { 
-                    isValid = false;
-                    break;
-                }
-                sequence.push(monSlots[startIndex + i]);
-            }
-
-            if (isValid) {
-                chosenMonitor = monId;
-                slotsToBook = sequence;
-                break; 
-            }
-        }
-      }
-
-      if (!chosenMonitor) {
-        throw new Error(`Plus de moniteur dispo pour ${p.firstName} à ${p.time}`);
-      }
-
-      let optionsNames = [];
-      if (p.selectedComplements && p.selectedComplements.length > 0) {
-        for (const compId of p.selectedComplements) {
-          const compRes = await client.query('SELECT name FROM complements WHERE id = $1', [compId]);
-          if (compRes.rows[0]) optionsNames.push(compRes.rows[0].name);
-        }
-      }
-      const bookingOptions = optionsNames.length > 0 ? optionsNames.join(', ') : null;
-      const clientMessage = contactNotes ? contactNotes : null;
-
-      // 🚨 LA NOUVELLE LOGIQUE MAÎTRE / ESCLAVE EST ICI !
-      let isFirstSlot = true;
-      
-      for (const slot of slotsToBook) {
-        const slotTitle = isFirstSlot ? `${flight.name} - ${p.firstName}` : `↪️ Suite ${flight.name} - ${p.firstName}`;
-        const slotNotes = isFirstSlot ? null : 'Extension auto';
-
+    // 2. On grille le bon cadeau ou le code promo (s'il y en avait un)
+    const voucherCode = session.metadata.voucher_code;
+    if (voucherCode) {
         await client.query(`
-          UPDATE slots 
-          SET status = 'booked', 
-              title = $1, 
-              notes = $8, 
-              phone = $3, 
-              email = $4, 
-              weight_checked = true,
-              flight_type_id = $5,
-              booking_options = $6,
-              client_message = $7
-          WHERE id = $2
-        `, [
-          slotTitle, 
-          slot.id, 
-          contactPhone, 
-          contactEmail, 
-          p.flightId, 
-          bookingOptions, 
-          clientMessage,
-          slotNotes
-        ]);
-        
-        const index = availableSlots.findIndex(s => s.id === slot.id);
-        if(index > -1) availableSlots.splice(index, 1);
-        
-        isFirstSlot = false; // Les créneaux suivants basculent en "Esclaves"
-      }
-    } 
+          UPDATE gift_cards 
+          SET current_uses = current_uses + 1,
+              status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END
+          WHERE UPPER(code) = UPPER($1)
+        `, [voucherCode]);
+    }
 
     await client.query('COMMIT'); 
     res.json({ success: true });
