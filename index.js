@@ -49,74 +49,128 @@ pool.on('error', (err, client) => {
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
 // ==========================================
-// 💌 SERVICE D'ENVOI D'EMAILS & SMS (BREVO)
+// 💌 MOTEUR D'EMAILS & SMS INTELLIGENT (BREVO)
 // ==========================================
 
-async function sendConfirmationEmail(customerEmail, customerName, flightName, date, time) {
+async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null) {
   if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
-  
+
+  // 🧠 1. LECTURE DU MESSAGE PERSONNALISÉ EN BASE DE DONNÉES
+  let customMessage = "";
+  try {
+    const settingKey = itemType === 'gift_card' ? 'email_gift_card' : `email_flight_${flightId}`;
+    const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [settingKey]);
+    if (setRes.rows.length > 0 && setRes.rows[0].value) {
+      customMessage = setRes.rows[0].value;
+    }
+  } catch(e) { console.error("Erreur lecture settings email:", e); }
+
+  let subject = "";
+  let htmlContent = "";
+
+  // 🎁 2. CAS BON CADEAU
+  if (itemType === 'gift_card') {
+    subject = "🎁 Votre Bon Cadeau Fluide Parapente !";
+    const messageCadeau = customMessage || "Merci pour votre achat ! Voici votre bon cadeau prêt à être offert :";
+
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
+        <p>${messageCadeau.replace(/\n/g, '<br>')}</p>
+        <div style="background-color: #f0f9ff; padding: 25px; border-radius: 8px; margin: 20px 0; text-align: center; border: 2px dashed #bae6fd;">
+          <p style="font-size: 14px; margin-bottom: 5px; color: #64748b; text-transform: uppercase; font-weight: bold;">Code d'activation :</p>
+          <p style="font-size: 28px; color: #f026b8; font-weight: 900; margin-top: 0; letter-spacing: 4px;">${dateOrCode}</p>
+          <p style="font-size: 16px; color: #0f172a; font-weight: bold; margin-top: 15px;">${itemName}</p>
+        </div>
+        <p><em>Vous pouvez télécharger sa magnifique version PDF à imprimer directement depuis la page de confirmation sur notre site !</em></p>
+        <br>
+        <p>L'équipe Fluide Parapente 🦅</p>
+      </div>
+    `;
+  } 
+  // 🪂 3. CAS RÉSERVATION DE VOL
+  else {
+    subject = "🪂 Confirmation de votre vol en parapente !";
+    
+    // Si pas de message personnalisé en BDD, on met nos conseils par défaut :
+    let conseils = customMessage;
+    if (!conseils) {
+       const flightNameLower = itemName.toLowerCase();
+       if (flightNameLower.includes('loupiot')) {
+          conseils = "Pour ce vol enfant, prévoyez des chaussures fermées, un petit coupe-vent et <strong>n'oubliez pas son doudou</strong> s'il souhaite voler avec ! 🧸";
+       } else if (flightNameLower.includes('prestige') || flightNameLower.includes('aiguille') || flightNameLower.includes('loup')) {
+          conseils = "Pour ce vol en haute altitude, <strong>habillez-vous chaudement</strong> (polaire, veste coupe-vent, et gants légers recommandés). N'oubliez pas vos lunettes de soleil. 🏔️";
+       } else {
+          conseils = "Prévoyez de bonnes chaussures fermées pour le décollage, une veste coupe-vent et des lunettes de soleil. Sensations garanties ! 😎";
+       }
+    }
+
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
+        <p>Votre réservation avec <strong>Fluide Parapente</strong> est bien confirmée ! 🎉</p>
+        <div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p><strong>Prestation :</strong> ${itemName}</p>
+          <p><strong>Date :</strong> ${dateOrCode}</p>
+          <p><strong>Heure :</strong> ${timeOrValue}</p>
+        </div>
+        <p>Nous vous attendons avec impatience au point de rendez-vous (Télécabine du Crêt du Loup).</p>
+        <div style="background-color: #fffbeb; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
+          <p style="margin: 0;"><strong>💡 Nos conseils pour ce vol :</strong><br>${conseils.replace(/\n/g, '<br>')}</p>
+        </div>
+        <br>
+        <p>L'équipe Fluide Parapente 🦅</p>
+      </div>
+    `;
+  }
+
   try {
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'api-key': process.env.BREVO_API_KEY,
-        'content-type': 'application/json'
-      },
+      headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
       body: JSON.stringify({
-        sender: { name: "Fluide Parapente", email: "contact@fluide-parapente.fr" }, // 👈 À MODIFIER SI BESOIN
+        sender: { name: "Fluide Parapente", email: "contact@fluide-parapente.fr" },
         to: [{ email: customerEmail, name: customerName }],
-        subject: "🪂 Confirmation de votre vol en parapente !",
-        htmlContent: `
-          <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-            <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
-            <p>Votre réservation avec <strong>Fluide Parapente</strong> est bien confirmée ! 🎉</p>
-            <div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
-              <p><strong>Prestation :</strong> ${flightName}</p>
-              <p><strong>Date :</strong> ${date}</p>
-              <p><strong>Heure :</strong> ${time}</p>
-            </div>
-            <p>Nous vous attendons avec impatience au point de rendez-vous (Crêt du Loup).</p>
-            <p>Prévoyez des chaussures de sport fermées, des lunettes de soleil et un coupe-vent.</p>
-            <br>
-            <p>L'équipe Fluide Parapente 🦅</p>
-          </div>
-        `
+        subject: subject,
+        htmlContent: htmlContent
       })
     });
     const data = await response.json();
-    console.log("📧 Email envoyé :", data);
-  } catch (err) {
-    console.error("❌ Erreur envoi email :", err);
-  }
+    console.log(`📧 Email [${itemType}] envoyé à ${customerEmail} :`, data);
+  } catch (err) { console.error("❌ Erreur envoi email :", err); }
 }
 
-async function sendConfirmationSMS(customerPhone, customerName, date, time) {
-  if (!process.env.BREVO_API_KEY || !customerPhone) return;
-  
+async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOrCode, timeOrValue, flightId = null) {
+  // On n'envoie pas de SMS pour l'achat pur d'un bon cadeau (souvent inutile)
+  if (!process.env.BREVO_API_KEY || !customerPhone || itemType === 'gift_card') return;
+
+  // 🧠 LECTURE DU SMS PERSONNALISÉ
+  let customSms = "";
+  try {
+    const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [`sms_flight_${flightId}`]);
+    if (setRes.rows.length > 0 && setRes.rows[0].value) {
+      customSms = setRes.rows[0].value;
+    }
+  } catch(e) { console.error("Erreur lecture settings SMS:", e); }
+
+  // Message par défaut si rien n'est configuré
+  const message = customSms || `Bonjour ${customerName}, votre vol le ${dateOrCode} à ${timeOrValue} est confirmé ! Prévoyez de bonnes chaussures. À très vite - L'équipe Fluide.`;
+
   let formattedPhone = customerPhone.replace(/\s+/g, '');
   if (formattedPhone.startsWith('0')) formattedPhone = '+33' + formattedPhone.substring(1);
 
   try {
-    const response = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+    await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
       method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'api-key': process.env.BREVO_API_KEY,
-        'content-type': 'application/json'
-      },
+      headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
       body: JSON.stringify({
         type: 'transactional',
         sender: 'FLUIDE', 
         recipient: formattedPhone,
-        content: `Bonjour ${customerName}, votre vol en parapente le ${date} à ${time} est confirmé ! Prévoyez de bonnes chaussures. À très vite - L'équipe Fluide.`
+        content: message
       })
     });
-    const data = await response.json();
-    console.log("📱 SMS envoyé :", data);
-  } catch (err) {
-    console.error("❌ Erreur envoi SMS :", err);
-  }
+  } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
 // --- VRAIE SÉCURITÉ BACKEND 🔒 ---
@@ -1030,6 +1084,35 @@ app.post('/api/public/checkout', async (req, res) => {
       }
       
       await client.query('COMMIT');
+      
+      // 💌 ENVOI EMAIL & SMS POUR RÉSERVATION AVEC BON CADEAU (0€)
+      if (passengers.length > 0) {
+        const firstPass = passengers[0];
+        const flightDateObj = new Date(firstPass.date);
+        const beautifulDate = flightDateObj.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+        // 1. Envoi de l'Email
+        await sendConfirmationEmail(
+          contact.email, 
+          `${contact.firstName} ${contact.lastName}`, 
+          'flight', 
+          firstPass.flightName, 
+          beautifulDate, 
+          firstPass.time,
+          firstPass.flightId
+        );
+
+        // 📱 2. Envoi du SMS
+        await sendConfirmationSMS(
+          contact.phone, 
+          contact.firstName, 
+          'flight', 
+          beautifulDate, 
+          firstPass.time,
+          firstPass.flightId
+        );
+      }
+
       // On renvoie un "faux" lien de session qui dirige direct sur la page succès
       return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}` });
     }
@@ -1083,7 +1166,6 @@ app.post('/api/public/checkout', async (req, res) => {
 });
 
 // --- API PUBLIQUE : VALIDATION APRÈS PAIEMENT ---
-// --- API PUBLIQUE : VALIDATION APRÈS PAIEMENT ---
 app.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
@@ -1121,10 +1203,24 @@ app.post('/api/public/confirm-booking', async (req, res) => {
           session.metadata.beneficiary_name,
           parseInt(session.metadata.price_paid_cents),
           validUntil,
-          session.metadata.image_url || '' // 👈 ON SAUVEGARDE L'IMAGE DANS LES NOTES !
+          session.metadata.image_url || '' 
         ]
       );
       
+      // 💌 ENVOI EMAIL DU BON CADEAU
+      const isSpecificFlight = session.metadata.flight_type_id ? true : false;
+      const giftName = isSpecificFlight ? "Vol en parapente" : `Avoir d'une valeur de ${session.metadata.price_paid_cents / 100}€`;
+
+      await sendConfirmationEmail(
+        session.metadata.buyer_email,
+        session.metadata.buyer_name,
+        'gift_card',
+        giftName,
+        finalCode, 
+        "",
+        null
+      );
+
       await client.query('COMMIT'); 
       return res.json({ success: true, is_gift_card: true, code: finalCode });
     }
@@ -1147,7 +1243,7 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     // 1. On réserve les créneaux
     await performBooking(client, contact, passengers);
 
-    // 💌 NOUVEAU : ENVOI DE L'EMAIL DE CONFIRMATION 💌
+    // 💌 ENVOI DE L'EMAIL DE CONFIRMATION DE VOL
     if (passengers.length > 0) {
       const firstPass = passengers[0];
       const flightDateObj = new Date(firstPass.date);
@@ -1156,15 +1252,23 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       await sendConfirmationEmail(
         contact.email,
         session.metadata.contact_name,
-        firstPass.flightName,
+        'flight',              
+        firstPass.flightName,  
         beautifulDate,
-        firstPass.time
+        firstPass.time,
+        firstPass.flightId
       );
       
-      // Dé-commentez la ligne ci-dessous si vous activez les SMS sur Brevo
-        await sendConfirmationSMS(contact.phone, session.metadata.contact_name, beautifulDate, firstPass.time);
+        // 📱 Envoi du SMS de confirmation (Dé-commenté et mis à jour)
+      await sendConfirmationSMS(
+        contact.phone, 
+        session.metadata.contact_name, 
+        'flight', 
+        beautifulDate, 
+        firstPass.time,
+        firstPass.flightId // 👈 Et on l'ajoute ici aussi !
+      );
     }
-    // --------------------------------------------------
 
     // 2. On grille le bon cadeau ou le code promo (s'il y en avait un)
     const voucherCode = session.metadata.voucher_code;
