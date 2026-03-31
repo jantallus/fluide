@@ -210,6 +210,56 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
+// 4. Fonction d'envoi d'Email de Notification à l'Admin
+async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue) {
+  if (!process.env.BREVO_API_KEY) return;
+
+  // Par défaut, on envoie à contact@... mais on vérifie si la BDD a d'autres adresses
+  let adminEmailsStr = "contact@fluide-parapente.fr";
+  try {
+    const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['admin_notification_emails']);
+    if (setRes.rows.length > 0 && setRes.rows[0].value) {
+      adminEmailsStr = setRes.rows[0].value;
+    }
+  } catch(e) { console.error("Erreur lecture settings admin emails:", e); }
+
+  // On découpe la chaîne par les virgules pour faire un tableau d'adresses propres
+  const emailsArray = adminEmailsStr.split(',').map(e => e.trim()).filter(e => e !== "");
+  if (emailsArray.length === 0) return;
+
+  const toList = emailsArray.map(email => ({ email: email, name: "Équipe Fluide" }));
+
+  const subject = `🚀 Nouvelle Réservation : ${itemName} - ${dateOrCode}`;
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+      <h2 style="color: #059669;">Nouvelle Réservation Confirmée ! 🎉</h2>
+      <p>Un client vient de valider une réservation sur le site.</p>
+      <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0ea5e9;">
+        <p><strong>Client :</strong> ${customerName}</p>
+        <p><strong>Téléphone :</strong> ${customerPhone}</p>
+        <p><strong>Prestation :</strong> ${itemName}</p>
+        <p><strong>Date :</strong> ${dateOrCode}</p>
+        <p><strong>Heure :</strong> ${timeOrValue}</p>
+      </div>
+      <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin" style="display:inline-block; background-color:#0ea5e9; color:white; padding:12px 25px; text-decoration:none; border-radius:8px; font-weight:bold;">Voir le planning</a></p>
+    </div>
+  `;
+
+  try {
+    await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sender: { name: "Système Fluide", email: "contact@fluide-parapente.fr" },
+        to: toList,
+        subject: subject,
+        htmlContent: htmlContent
+      })
+    });
+    console.log(`🛎️ Notification Admin envoyée à :`, adminEmailsStr);
+  } catch (err) { console.error("❌ Erreur envoi notification admin :", err); }
+}
+
 // --- VRAIE SÉCURITÉ BACKEND 🔒 ---
 
 const authenticateUser = (req, res, next) => {
@@ -1122,35 +1172,17 @@ app.post('/api/public/checkout', async (req, res) => {
       
       await client.query('COMMIT');
       
-      // 💌 ENVOI EMAIL & SMS POUR RÉSERVATION AVEC BON CADEAU (0€)
+      // 💌 ENVOI EMAIL, SMS & ALERTE ADMIN (0€)
       if (passengers.length > 0) {
         const firstPass = passengers[0];
         const flightDateObj = new Date(firstPass.date);
         const beautifulDate = flightDateObj.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
 
-        // 1. Envoi de l'Email
-        await sendConfirmationEmail(
-          contact.email, 
-          `${contact.firstName} ${contact.lastName}`, 
-          'flight', 
-          firstPass.flightName, 
-          beautifulDate, 
-          firstPass.time,
-          firstPass.flightId
-        );
-
-        // 📱 2. Envoi du SMS
-        await sendConfirmationSMS(
-          contact.phone, 
-          contact.firstName, 
-          'flight', 
-          beautifulDate, 
-          firstPass.time,
-          firstPass.flightId
-        );
+        await sendConfirmationEmail(contact.email, `${contact.firstName} ${contact.lastName}`, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
+        await sendConfirmationSMS(contact.phone, contact.firstName, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
+        await sendAdminNotificationEmail(`${contact.firstName} ${contact.lastName}`, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
       }
 
-      // On renvoie un "faux" lien de session qui dirige direct sur la page succès
       return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}` });
     }
 
@@ -1314,14 +1346,21 @@ app.post('/api/public/confirm-booking', async (req, res) => {
         firstPass.flightId
       );
       
-        // 📱 Envoi du SMS de confirmation (Dé-commenté et mis à jour)
       await sendConfirmationSMS(
         contact.phone, 
         session.metadata.contact_name, 
         'flight', 
         beautifulDate, 
         firstPass.time,
-        firstPass.flightId // 👈 Et on l'ajoute ici aussi !
+        firstPass.flightId
+      );
+
+      await sendAdminNotificationEmail(
+        session.metadata.contact_name,
+        contact.phone,
+        firstPass.flightName,
+        beautifulDate,
+        firstPass.time
       );
     }
 
