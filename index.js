@@ -52,10 +52,44 @@ const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 // 💌 MOTEUR D'EMAILS & SMS INTELLIGENT (BREVO)
 // ==========================================
 
-async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null) {
+// 1. Fonction pour générer le Buffer du PDF (pour la pièce jointe)
+async function generatePDFBuffer(voucher) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 0 });
+    let buffers = [];
+    doc.on('data', buffers.push.bind(buffers));
+    doc.on('end', () => resolve(Buffer.concat(buffers)));
+    doc.on('error', reject);
+
+    const backgroundImage = voucher.notes && voucher.notes !== '' ? voucher.notes : 'cadeau-background.jpg';
+    const cleanImageName = backgroundImage.startsWith('/') ? backgroundImage.substring(1) : backgroundImage;
+    const finalImagePath = path.join(process.cwd(), 'public', cleanImageName);
+
+    if (fs.existsSync(finalImagePath)) {
+        doc.image(finalImagePath, 0, 0, { width: 595, height: 842 });
+    } else {
+        doc.rect(0, 0, 595, 842).fill('#1e3a8a'); 
+    }
+
+    doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
+    doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
+    
+    doc.fillColor('#1e40af').font('Helvetica-Bold');
+    doc.fontSize(22).text(voucher.beneficiary_name.toUpperCase(), 60, 355);
+    doc.fontSize(22).text(voucher.buyer_name.toUpperCase(), 60, 425);
+    
+    const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
+    doc.fontSize(28).text(giftName.toUpperCase(), 60, 505);
+    doc.fontSize(42).fillColor('#f026b8').text(voucher.code, 60, 595, { characterSpacing: 4 });
+    
+    doc.end();
+  });
+}
+
+// 2. Fonction d'envoi d'Email
+async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null, pdfBuffer = null) {
   if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
 
-  // 🧠 1. LECTURE DU MESSAGE PERSONNALISÉ EN BASE DE DONNÉES
   let customMessage = "";
   try {
     const settingKey = itemType === 'gift_card' ? 'email_gift_card' : `email_flight_${flightId}`;
@@ -68,7 +102,6 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
   let subject = "";
   let htmlContent = "";
 
-  // 🎁 2. CAS BON CADEAU
   if (itemType === 'gift_card') {
     subject = "🎁 Votre Bon Cadeau Fluide Parapente !";
     const messageCadeau = customMessage || "Merci pour votre achat ! Voici votre bon cadeau prêt à être offert :";
@@ -82,17 +115,13 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
           <p style="font-size: 28px; color: #f026b8; font-weight: 900; margin-top: 0; letter-spacing: 4px;">${dateOrCode}</p>
           <p style="font-size: 16px; color: #0f172a; font-weight: bold; margin-top: 15px;">${itemName}</p>
         </div>
-        <p><em>Vous pouvez télécharger sa magnifique version PDF à imprimer directement depuis la page de confirmation sur notre site !</em></p>
+        <p><em>Veuillez trouver votre magnifique bon cadeau en pièce jointe de cet email ! Vous pouvez également le télécharger depuis notre site.</em></p>
         <br>
         <p>L'équipe Fluide Parapente 🦅</p>
       </div>
     `;
-  } 
-  // 🪂 3. CAS RÉSERVATION DE VOL
-  else {
+  } else {
     subject = "🪂 Confirmation de votre vol en parapente !";
-    
-    // Si pas de message personnalisé en BDD, on met nos conseils par défaut :
     let conseils = customMessage;
     if (!conseils) {
        const flightNameLower = itemName.toLowerCase();
@@ -124,27 +153,36 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     `;
   }
 
+  const emailPayload = {
+    sender: { name: "Fluide Parapente", email: "contact@fluide-parapente.fr" },
+    to: [{ email: customerEmail, name: customerName }],
+    subject: subject,
+    htmlContent: htmlContent
+  };
+
+  // 📎 SI UN PDF EST PRÉSENT, ON L'ATTACHE À L'EMAIL
+  if (pdfBuffer) {
+    emailPayload.attachment = [{
+      content: pdfBuffer.toString('base64'),
+      name: `Bon_Cadeau_${dateOrCode}.pdf`
+    }];
+  }
+
   try {
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: { 'accept': 'application/json', 'api-key': process.env.BREVO_API_KEY, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sender: { name: "Fluide Parapente", email: "contact@fluide-parapente.fr" },
-        to: [{ email: customerEmail, name: customerName }],
-        subject: subject,
-        htmlContent: htmlContent
-      })
+      body: JSON.stringify(emailPayload)
     });
     const data = await response.json();
     console.log(`📧 Email [${itemType}] envoyé à ${customerEmail} :`, data);
   } catch (err) { console.error("❌ Erreur envoi email :", err); }
 }
 
+// 3. Fonction d'envoi de SMS
 async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOrCode, timeOrValue, flightId = null) {
-  // On n'envoie pas de SMS pour l'achat pur d'un bon cadeau (souvent inutile)
   if (!process.env.BREVO_API_KEY || !customerPhone || itemType === 'gift_card') return;
 
-  // 🧠 LECTURE DU SMS PERSONNALISÉ
   let customSms = "";
   try {
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [`sms_flight_${flightId}`]);
@@ -153,7 +191,6 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
     }
   } catch(e) { console.error("Erreur lecture settings SMS:", e); }
 
-  // Message par défaut si rien n'est configuré
   const message = customSms || `Bonjour ${customerName}, votre vol le ${dateOrCode} à ${timeOrValue} est confirmé ! Prévoyez de bonnes chaussures. À très vite - L'équipe Fluide.`;
 
   let formattedPhone = customerPhone.replace(/\s+/g, '');
@@ -1184,7 +1221,7 @@ app.post('/api/public/confirm-booking', async (req, res) => {
 
     await client.query('BEGIN'); 
 
-    // 🎁 CAS 1 : C'EST L'ACHAT D'UN BON CADEAU !
+    // 🎁 // 🎁 CAS 1 : C'EST L'ACHAT D'UN BON CADEAU !
     if (session.metadata.purchase_type === 'gift_card') {
       const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
       
@@ -1206,11 +1243,28 @@ app.post('/api/public/confirm-booking', async (req, res) => {
           session.metadata.image_url || '' 
         ]
       );
-      
-      // 💌 ENVOI EMAIL DU BON CADEAU
+
       const isSpecificFlight = session.metadata.flight_type_id ? true : false;
       const giftName = isSpecificFlight ? "Vol en parapente" : `Avoir d'une valeur de ${session.metadata.price_paid_cents / 100}€`;
 
+      // 🎁 CRÉATION DU PDF POUR LA PIÈCE JOINTE
+      const voucherForPdf = {
+        code: finalCode,
+        beneficiary_name: session.metadata.beneficiary_name,
+        buyer_name: session.metadata.buyer_name,
+        price_paid_cents: session.metadata.price_paid_cents,
+        flight_name: isSpecificFlight ? "Vol en parapente" : null,
+        notes: session.metadata.image_url
+      };
+      
+      let pdfBuffer = null;
+      try {
+         pdfBuffer = await generatePDFBuffer(voucherForPdf);
+      } catch (e) {
+         console.error("Erreur génération PDF joint :", e);
+      }
+      
+      // 💌 ENVOI EMAIL DU BON CADEAU AVEC LA PIÈCE JOINTE
       await sendConfirmationEmail(
         session.metadata.buyer_email,
         session.metadata.buyer_name,
@@ -1218,7 +1272,8 @@ app.post('/api/public/confirm-booking', async (req, res) => {
         giftName,
         finalCode, 
         "",
-        null
+        null,
+        pdfBuffer // 👈 ON PASSE LE PDF ICI !
       );
 
       await client.query('COMMIT'); 
