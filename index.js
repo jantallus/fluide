@@ -48,6 +48,77 @@ pool.on('error', (err, client) => {
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
+// ==========================================
+// 💌 SERVICE D'ENVOI D'EMAILS & SMS (BREVO)
+// ==========================================
+
+async function sendConfirmationEmail(customerEmail, customerName, flightName, date, time) {
+  if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
+  
+  try {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { name: "Fluide Parapente", email: "contact@fluide-parapente.fr" }, // 👈 À MODIFIER SI BESOIN
+        to: [{ email: customerEmail, name: customerName }],
+        subject: "🪂 Confirmation de votre vol en parapente !",
+        htmlContent: `
+          <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+            <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
+            <p>Votre réservation avec <strong>Fluide Parapente</strong> est bien confirmée ! 🎉</p>
+            <div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+              <p><strong>Prestation :</strong> ${flightName}</p>
+              <p><strong>Date :</strong> ${date}</p>
+              <p><strong>Heure :</strong> ${time}</p>
+            </div>
+            <p>Nous vous attendons avec impatience au point de rendez-vous (Crêt du Loup).</p>
+            <p>Prévoyez des chaussures de sport fermées, des lunettes de soleil et un coupe-vent.</p>
+            <br>
+            <p>L'équipe Fluide Parapente 🦅</p>
+          </div>
+        `
+      })
+    });
+    const data = await response.json();
+    console.log("📧 Email envoyé :", data);
+  } catch (err) {
+    console.error("❌ Erreur envoi email :", err);
+  }
+}
+
+async function sendConfirmationSMS(customerPhone, customerName, date, time) {
+  if (!process.env.BREVO_API_KEY || !customerPhone) return;
+  
+  let formattedPhone = customerPhone.replace(/\s+/g, '');
+  if (formattedPhone.startsWith('0')) formattedPhone = '+33' + formattedPhone.substring(1);
+
+  try {
+    const response = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        type: 'transactional',
+        sender: 'FLUIDE', 
+        recipient: formattedPhone,
+        content: `Bonjour ${customerName}, votre vol en parapente le ${date} à ${time} est confirmé ! Prévoyez de bonnes chaussures. À très vite - L'équipe Fluide.`
+      })
+    });
+    const data = await response.json();
+    console.log("📱 SMS envoyé :", data);
+  } catch (err) {
+    console.error("❌ Erreur envoi SMS :", err);
+  }
+}
+
 // --- VRAIE SÉCURITÉ BACKEND 🔒 ---
 
 const authenticateUser = (req, res, next) => {
@@ -1075,6 +1146,25 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     
     // 1. On réserve les créneaux
     await performBooking(client, contact, passengers);
+
+    // 💌 NOUVEAU : ENVOI DE L'EMAIL DE CONFIRMATION 💌
+    if (passengers.length > 0) {
+      const firstPass = passengers[0];
+      const flightDateObj = new Date(firstPass.date);
+      const beautifulDate = flightDateObj.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+      await sendConfirmationEmail(
+        contact.email,
+        session.metadata.contact_name,
+        firstPass.flightName,
+        beautifulDate,
+        firstPass.time
+      );
+      
+      // Dé-commentez la ligne ci-dessous si vous activez les SMS sur Brevo
+        await sendConfirmationSMS(contact.phone, session.metadata.contact_name, beautifulDate, firstPass.time);
+    }
+    // --------------------------------------------------
 
     // 2. On grille le bon cadeau ou le code promo (s'il y en avait un)
     const voucherCode = session.metadata.voucher_code;
