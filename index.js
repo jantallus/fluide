@@ -5,7 +5,9 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 process.env.TZ = 'Europe/Paris'; 
 console.log("🚀 LE SERVEUR DÉMARRE VRAIMENT ICI !");
@@ -492,6 +494,57 @@ app.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
   }
 });
 
+// --- MODÈLES DE BONS CADEAUX (Boutique) ---
+app.get('/api/gift-card-templates', async (req, res) => {
+  const { publicOnly } = req.query;
+  try {
+    let query = `
+      SELECT gct.*, ft.name as flight_name 
+      FROM gift_card_templates gct
+      LEFT JOIN flight_types ft ON gct.flight_type_id = ft.id
+    `;
+    if (publicOnly === 'true') {
+      query += ` WHERE gct.is_published = true ORDER BY gct.price_cents ASC`;
+    } else {
+      query += ` ORDER BY gct.id DESC`;
+    }
+    const r = await pool.query(query);
+    res.json(r.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published } = req.body;
+  try {
+    const r = await pool.query(
+      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false]
+    );
+    res.json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published } = req.body;
+  try {
+    await pool.query(
+      `UPDATE gift_card_templates 
+       SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7
+       WHERE id = $8`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM gift_card_templates WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // --- CLIENTS ---
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
@@ -695,6 +748,45 @@ app.get('/api/public/availabilities', async (req, res) => {
 
 // --- API PUBLIQUE : PAIEMENT STRIPE ---
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// 🛒 ACHAT D'UN BON CADEAU (STRIPE)
+app.post('/api/public/checkout-gift-card', async (req, res) => {
+  const { template, buyer } = req.body;
+  try {
+    const sessionConfig = {
+      payment_method_types: ['card'],
+      customer_email: buyer.email,
+      line_items: [{
+        price_data: {
+          currency: 'eur',
+          product_data: {
+            name: template.title,
+            description: `De la part de : ${buyer.name} | Pour : ${buyer.beneficiaryName}`
+          },
+          unit_amount: template.price_cents
+        },
+        quantity: 1
+      }],
+      mode: 'payment',
+      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
+      metadata: {
+        purchase_type: 'gift_card', // 👈 Le mot de passe pour dire au serveur "C'est un bon !"
+        buyer_name: buyer.name,
+        buyer_email: buyer.email,
+        beneficiary_name: buyer.beneficiaryName,
+        price_paid_cents: template.price_cents,
+        validity_months: template.validity_months,
+        flight_type_id: template.flight_type_id || '',
+        image_url: template.image_url || ''
+      }
+    };
+    const session = await stripe.checkout.sessions.create(sessionConfig);
+    res.json({ url: session.url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // 🛠️ FONCTION MAGIQUE : Effectue la réservation dans la BDD (utilisée pour les 0€ et après Stripe)
 async function performBooking(client, contact, passengers) {
@@ -920,13 +1012,14 @@ app.post('/api/public/checkout', async (req, res) => {
 });
 
 // --- API PUBLIQUE : VALIDATION APRÈS PAIEMENT ---
+// --- API PUBLIQUE : VALIDATION APRÈS PAIEMENT ---
 app.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 
   if (session_id.startsWith('GRATUIT_')) {
       return res.json({ success: true, message: "Réservation validée via code 100%" });
-    }
+  }
 
   const client = await pool.connect(); 
 
@@ -936,6 +1029,36 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       return res.status(400).json({ error: "Le paiement n'a pas abouti." });
     }
 
+    await client.query('BEGIN'); 
+
+    // 🎁 CAS 1 : C'EST L'ACHAT D'UN BON CADEAU !
+    if (session.metadata.purchase_type === 'gift_card') {
+      const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      
+      // Calcul de la date d'expiration
+      const validUntil = new Date();
+      validUntil.setMonth(validUntil.getMonth() + parseInt(session.metadata.validity_months || 12));
+
+      await client.query(
+        `INSERT INTO gift_cards 
+        (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes) 
+        VALUES ($1, $2, $3, $4, $5, 'gift_card', 'valid', 'both', $6, $7)`,
+        [
+          finalCode, 
+          session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null,
+          session.metadata.buyer_name,
+          session.metadata.beneficiary_name,
+          parseInt(session.metadata.price_paid_cents),
+          validUntil,
+          session.metadata.image_url || '' // 👈 ON SAUVEGARDE L'IMAGE DANS LES NOTES !
+        ]
+      );
+      
+      await client.query('COMMIT'); 
+      return res.json({ success: true, is_gift_card: true, code: finalCode });
+    }
+
+    // 🪂 CAS 2 : C'EST UNE RÉSERVATION DE VOL CLASSIQUE
     const contact = {
       phone: session.metadata.contact_phone,
       email: session.metadata.contact_email,
@@ -949,8 +1072,6 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       chunkIndex++;
     }
     const passengers = JSON.parse(passengersJson);
-
-    await client.query('BEGIN'); 
     
     // 1. On réserve les créneaux
     await performBooking(client, contact, passengers);
@@ -975,6 +1096,98 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
+  }
+});
+
+// --- API PUBLIQUE : TÉLÉCHARGEMENT DU BON CADEAU (PDF) ---
+app.get('/api/public/download-gift-card/:code', async (req, res) => {
+  const { code } = req.params;
+
+  try {
+    // 1. Aller chercher les infos du bon dans la base de données
+    const voucherRes = await pool.query(
+      `SELECT gc.*, ft.name as flight_name
+       FROM gift_cards gc
+       LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id
+       WHERE UPPER(gc.code) = UPPER($1)`,
+      [code]
+    );
+
+    if (voucherRes.rows.length === 0) {
+      return res.status(404).send("Bon cadeau introuvable.");
+    }
+
+    const voucher = voucherRes.rows[0];
+
+    // 2. Créer le document PDF (Une seule fois ! 😉)
+    const doc = new PDFDocument({ size: 'A4', margin: 0 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=Bon_Cadeau_${voucher.code}.pdf`);
+    doc.pipe(res);
+
+    // 3. Dessiner le fond (image) - On lit directement depuis les "notes" !
+    const backgroundImage = voucher.notes && voucher.notes !== '' ? voucher.notes : '/cadeau-background.jpg';
+    const cleanImageName = backgroundImage.startsWith('/') ? backgroundImage.substring(1) : backgroundImage;
+    const finalImagePath = path.join(process.cwd(), 'public', cleanImageName);
+
+    if (fs.existsSync(finalImagePath)) {
+        doc.image(finalImagePath, 0, 0, { width: 595, height: 842 });
+    } else {
+        console.log("⚠️ Image introuvable pour le PDF :", finalImagePath);
+        doc.rect(0, 0, 595, 842).fill('#1e3a8a'); 
+    }
+
+    // 4. Ajouter les éléments statiques (Titre, Contact, etc.)
+    doc.fillColor('white');
+    
+    // On démarre à Y = 230 pour laisser tout le quart supérieur vide !
+    doc.font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
+    doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
+
+    // Contact en bas (Légèrement remonté pour la marge)
+    doc.font('Helvetica').fontSize(10).text('Fluide Parapente - La Clusaz', 0, 765, { align: 'center', width: 595 });
+    doc.text('Tél : 06 12 34 56 78 - www.fluideparapente.com', 0, 780, { align: 'center', width: 595 });
+
+    // 5. Ajouter les éléments dynamiques (Acheteur, Bénéficiaire, Type, Code, Expiration)
+    doc.fillColor('#0f172a'); // Bleu très foncé pour le texte
+    doc.font('Helvetica-Bold');
+
+    // Section 1 : Pour qui / De la part de
+    doc.fontSize(10).fillColor('#64748b').text('BÉNÉFICIAIRE', 60, 340, { characterSpacing: 2 });
+    doc.fontSize(22).fillColor('#1e40af').text(voucher.beneficiary_name.toUpperCase(), 60, 355);
+
+    doc.fontSize(10).fillColor('#64748b').text('ACHETEUR', 60, 410, { characterSpacing: 2 });
+    doc.fontSize(22).fillColor('#1e40af').text(voucher.buyer_name.toUpperCase(), 60, 425);
+
+    // Section 2 : Valable pour
+    doc.fontSize(10).fillColor('#64748b').text('VALABLE POUR', 60, 490, { characterSpacing: 2 });
+    if (voucher.flight_name) {
+      doc.fontSize(28).fillColor('#1e40af').text(voucher.flight_name.toUpperCase(), 60, 505);
+    } else {
+      const montant = voucher.price_paid_cents / 100;
+      doc.fontSize(28).fillColor('#1e40af').text(`UN AVOIR LIBRE DE ${montant}€`, 60, 505);
+    }
+
+    // Section 3 : Le code unique
+    doc.fontSize(10).fillColor('#64748b').text("CODE D'ACTIVATION UNIQUE", 60, 580, { characterSpacing: 2 });
+    doc.fontSize(42).fillColor('#f026b8').text(voucher.code, 60, 595, { characterSpacing: 4 });
+
+    // Section 4 : Date d'expiration
+    const expiryDate = new Date(voucher.valid_until);
+    const formattedDate = expiryDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    doc.fontSize(10).fillColor('#64748b').text("DATE D'EXPIRATION", 60, 680, { characterSpacing: 2 });
+    doc.fontSize(20).fillColor('#1e40af').text(formattedDate.toUpperCase(), 60, 695);
+
+    // Finaliser le document
+    doc.end();
+
+  } catch (err) {
+    console.error("Erreur génération PDF:", err);
+    if (!res.headersSent) {
+      res.status(500).send("Erreur lors de la génération du bon cadeau.");
+    }
   }
 });
 
