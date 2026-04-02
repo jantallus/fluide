@@ -86,7 +86,7 @@ async function generatePDFBuffer(voucher) {
   });
 }
 
-// 2. Fonction d'envoi d'Email
+/// 2. Fonction d'envoi d'Email
 async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null, pdfBuffer = null) {
   if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
 
@@ -96,6 +96,12 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [settingKey]);
     if (setRes.rows.length > 0 && setRes.rows[0].value) {
       customMessage = setRes.rows[0].value;
+      
+      // 🎯 NOUVEAU : Remplacement dynamique des variables pour l'Email !
+      customMessage = customMessage
+        .replace(/\[PRENOM\]/g, customerName)
+        .replace(/\[DATE\]/g, dateOrCode)
+        .replace(/\[HEURE\]/g, timeOrValue);
     }
   } catch(e) { console.error("Erreur lecture settings email:", e); }
 
