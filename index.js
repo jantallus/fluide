@@ -188,6 +188,12 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [`sms_flight_${flightId}`]);
     if (setRes.rows.length > 0 && setRes.rows[0].value) {
       customSms = setRes.rows[0].value;
+      
+      // 🎯 NOUVEAU : La magie du remplacement des variables dynamiques !
+      customSms = customSms
+        .replace(/\[PRENOM\]/g, customerName)
+        .replace(/\[DATE\]/g, dateOrCode)
+        .replace(/\[HEURE\]/g, timeOrValue);
     }
   } catch(e) { console.error("Erreur lecture settings SMS:", e); }
 
