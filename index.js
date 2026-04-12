@@ -472,11 +472,11 @@ app.get('/api/complements', async (req, res) => {
 });
 
 app.post('/api/complements', authenticateAdmin, async (req, res) => {
-  const { name, description, price_cents } = req.body;
+  const { name, description, price_cents, image_url } = req.body;
   try {
     const r = await pool.query(
-      'INSERT INTO complements (name, description, price_cents, is_active) VALUES ($1, $2, $3, true) RETURNING *',
-      [name, description, price_cents]
+      'INSERT INTO complements (name, description, price_cents, is_active, image_url) VALUES ($1, $2, $3, true, $4) RETURNING *',
+      [name, description, price_cents, image_url || null]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
