@@ -1256,7 +1256,7 @@ app.post('/api/public/checkout', async (req, res) => {
       line_items: line_items,
       mode: 'payment',
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reserver`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking`,
       metadata: metadata 
     };
 
