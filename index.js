@@ -833,6 +833,40 @@ app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
   }
 });
 
+// 3. MODIFIER UN BON OU UNE PROMO EXISTANTE (Espace Admin)
+app.put('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
+  const { 
+    flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes,
+    discount_type, discount_value, max_uses, valid_from, valid_until, discount_scope
+  } = req.body;
+
+  try {
+    await pool.query(
+      `UPDATE gift_cards 
+       SET flight_type_id = $1, buyer_name = $2, beneficiary_name = $3, price_paid_cents = $4, notes = $5, 
+           discount_type = $6, discount_value = $7, max_uses = $8, valid_from = $9, valid_until = $10, discount_scope = $11
+       WHERE id = $12`,
+      [
+        flight_type_id || null, 
+        buyer_name || null, 
+        beneficiary_name || null, 
+        price_paid_cents || 0, 
+        notes || '',
+        discount_type || null,
+        discount_value || null,
+        max_uses || null,
+        valid_from || null,
+        valid_until || null,
+        discount_scope || 'both',
+        req.params.id
+      ]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // SUPPRIMER UN CODE OU UN BON
 app.delete('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
   try {
