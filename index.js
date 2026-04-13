@@ -906,10 +906,30 @@ app.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- CLIENTS ---
+// --- CLIENTS (Annuaire Dynamique depuis le Calendrier 🚀) ---
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM clients ORDER BY last_name ASC, first_name ASC');
+    const r = await pool.query(`
+      SELECT 
+        MAX(id) as id,
+        title as first_name,
+        '' as last_name,
+        MAX(email) as email,
+        MAX(phone) as phone,
+        MAX(weight) as weight,
+        MAX(start_time) as last_flight_date,
+        (array_agg(payment_status ORDER BY start_time DESC))[1] as payment_status
+      FROM slots
+      WHERE status = 'booked' 
+        AND title IS NOT NULL 
+        AND title != 'NOTE'
+        AND title NOT LIKE '☕%' 
+        AND title NOT LIKE '%NON DISPO%' 
+        AND title NOT LIKE '↪️ Suite%'
+        AND title NOT LIKE '%❌%'
+      GROUP BY title
+      ORDER BY last_flight_date DESC
+    `);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1183,8 +1203,8 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
   }
 });
 
-// 🛠️ FONCTION MAGIQUE : Effectue la réservation dans la BDD (utilisée pour les 0€ et après Stripe)
-async function performBooking(client, contact, passengers) {
+// 🎯 NOUVEAU : On ajoute "paymentStatus" à la fonction
+async function performBooking(client, contact, passengers, paymentStatus = null) {
   for (const p of passengers) {
     const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
     const flight = flightRes.rows[0];
@@ -1263,9 +1283,9 @@ async function performBooking(client, contact, passengers) {
 
       await client.query(`
         UPDATE slots 
-        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7
+        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7, payment_status = $9
         WHERE id = $2
-      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes]);
+      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]); // 🎯 NOUVEAU : paymentStatus = $9
       
       const index = availableSlots.findIndex(s => s.id === slot.id);
       if(index > -1) availableSlots.splice(index, 1);
@@ -1342,7 +1362,12 @@ app.post('/api/public/checkout', async (req, res) => {
     // 🏆 CAS MAGIQUE : Le panier est de 0€, on contourne Stripe !
     if (finalPriceCents === 0) {
       await client.query('BEGIN');
-      await performBooking(client, contact, passengers);
+      // 🎯 NOUVEAU : On détecte l'origine exacte du bon ou code promo !
+      let pStatus = 'À régler sur place';
+      if (appliedVoucher) {
+        pStatus = appliedVoucher.type === 'gift_card' ? 'Payé (Bon Cadeau)' : `Payé (Promo : ${appliedVoucher.code})`;
+      }
+      await performBooking(client, contact, passengers, pStatus);
       
       if (appliedVoucher) {
         await client.query(`
@@ -1511,7 +1536,12 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     const passengers = JSON.parse(passengersJson);
     
     // 1. On réserve les créneaux
-    await performBooking(client, contact, passengers);
+    // 🎯 NOUVEAU : On détecte si c'est un paiement pur CB ou avec un code promo partiel
+    let pStatus = 'Payé (CB en ligne)';
+    if (session.metadata.voucher_code) {
+       pStatus = `Payé (CB + Promo : ${session.metadata.voucher_code})`;
+    }
+    await performBooking(client, contact, passengers, pStatus);
 
     // 💌 ENVOI DE L'EMAIL DE CONFIRMATION DE VOL
     if (passengers.length > 0) {
