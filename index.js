@@ -1278,14 +1278,17 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
 
     let isFirstSlot = true;
     for (const slot of slotsToBook) {
-      const slotTitle = isFirstSlot ? `${flight.name} - ${p.firstName}` : `↪️ Suite ${flight.name} - ${p.firstName}`;
+      // 🎯 MODIFIÉ : On affiche désormais le Prénom et le NOM (en majuscules)
+      const fullName = `${p.firstName} ${contact.lastName.toUpperCase()}`;
+      
+      const slotTitle = isFirstSlot ? fullName : `↪️ Suite ${fullName}`;
       const slotNotes = isFirstSlot ? null : 'Extension auto';
 
       await client.query(`
         UPDATE slots 
         SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7, payment_status = $9
         WHERE id = $2
-      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]); // 🎯 NOUVEAU : paymentStatus = $9
+      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]);
       
       const index = availableSlots.findIndex(s => s.id === slot.id);
       if(index > -1) availableSlots.splice(index, 1);
