@@ -253,7 +253,7 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
         <p><strong>Date :</strong> ${dateOrCode}</p>
         <p><strong>Heure :</strong> ${timeOrValue}</p>
       </div>
-      <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin" style="display:inline-block; background-color:#0ea5e9; color:white; padding:12px 25px; text-decoration:none; border-radius:8px; font-weight:bold;">Voir le planning</a></p>
+      <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/planning" style="display:inline-block; background-color:#0ea5e9; color:white; padding:12px 25px; text-decoration:none; border-radius:8px; font-weight:bold;">Voir le planning</a></p>
     </div>
   `;
 
