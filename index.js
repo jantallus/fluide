@@ -351,27 +351,54 @@ app.get('/api/users', authenticateAdmin, async (req, res) => {
 });
 
 app.post('/api/users', authenticateAdmin, async (req, res) => {
-  const { first_name, email, password, role, is_active_monitor } = req.body;
+  const { first_name, email, password, role, is_active_monitor, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, status) 
-       VALUES ($1, $2, $3, $4, $5, 'Actif') RETURNING id, first_name, role`,
-      [first_name, email, hash, role, is_active_monitor]
+      `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, status, available_start_date, available_end_date, daily_start_time, daily_end_time) 
+       VALUES ($1, $2, $3, $4, $5, 'Actif', $6, $7, $8, $9) RETURNING id, first_name, role`,
+      [first_name, email, hash, role, is_active_monitor, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🚨 CORRECTION : On remet la route PATCH manquante pour modifier un moniteur !
-app.patch('/api/users/:id', authenticateAdmin, async (req, res) => {
-  const { first_name, email, role, is_active_monitor, status, password } = req.body;
+// 🎯 MODIFIÉ : On utilise authenticateUser pour laisser passer les permanents
+app.patch('/api/users/:id', authenticateUser, async (req, res) => {
+  const { first_name, email, role, is_active_monitor, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
+    // 🛡️ SÉCURITÉ : Un permanent ne peut modifier QUE son propre profil
+    if (req.user.role !== 'admin' && req.user.id !== parseInt(req.params.id)) {
+      return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
+    }
+
+    // 🛡️ SÉCURITÉ : Un permanent ne peut pas s'auto-promouvoir admin !
+    let finalRole = role;
+    let finalActive = is_active_monitor;
+    let finalStatus = status;
+    if (req.user.role !== 'admin') {
+      const check = await pool.query('SELECT role, is_active_monitor, status FROM users WHERE id=$1', [req.params.id]);
+      finalRole = check.rows[0].role;
+      finalActive = check.rows[0].is_active_monitor;
+      finalStatus = check.rows[0].status;
+    }
+
+    const startD = available_start_date || null;
+    const endD = available_end_date || null;
+    const startT = daily_start_time || null;
+    const endT = daily_end_time || null;
+
     if (password) {
        const hash = await bcrypt.hash(password, 10);
-       await pool.query('UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, status = $5, password_hash = $6 WHERE id = $7', [first_name, email, role, is_active_monitor, status, hash, req.params.id]);
+       await pool.query(
+         'UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, status = $5, password_hash = $6, available_start_date = $7, available_end_date = $8, daily_start_time = $9, daily_end_time = $10 WHERE id = $11', 
+         [first_name, email, finalRole, finalActive, finalStatus, hash, startD, endD, startT, endT, req.params.id]
+       );
     } else {
-       await pool.query('UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, status = $5 WHERE id = $6', [first_name, email, role, is_active_monitor, status, req.params.id]);
+       await pool.query(
+         'UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, status = $5, available_start_date = $6, available_end_date = $7, daily_start_time = $8, daily_end_time = $9 WHERE id = $10', 
+         [first_name, email, finalRole, finalActive, finalStatus, startD, endD, startT, endT, req.params.id]
+       );
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -385,11 +412,41 @@ app.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 🎯 RÉCUPÉRER LES PÉRIODES D'UN MONITEUR
+app.get('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT *, TO_CHAR(start_date, \'YYYY-MM-DD\') as start_date, TO_CHAR(end_date, \'YYYY-MM-DD\') as end_date FROM monitor_availabilities WHERE user_id = $1 ORDER BY start_date ASC', [req.params.id]);
+    res.json(r.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 🎯 ENREGISTRER LES PÉRIODES (Écrase et remplace)
+app.put('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
+  const { availabilities } = req.body; // Tableau de périodes
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM monitor_availabilities WHERE user_id = $1', [req.params.id]);
+    for (const a of availabilities) {
+      await client.query(
+        'INSERT INTO monitor_availabilities (user_id, start_date, end_date, daily_start_time, daily_end_time) VALUES ($1, $2, $3, $4, $5)',
+        [req.params.id, a.start_date, a.end_date, a.daily_start_time, a.daily_end_time]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
+  finally { client.release(); }
+});
+
 // 🎯 1. ON SÉCURISE L'AFFICHAGE DES COLONNES DU CALENDRIER
 app.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     let query = `
-      SELECT id, first_name, email, role, is_active_monitor, status 
+      SELECT id, first_name, email, role, is_active_monitor, status, 
+             TO_CHAR(available_start_date, 'YYYY-MM-DD') as available_start_date,
+             TO_CHAR(available_end_date, 'YYYY-MM-DD') as available_end_date,
+             daily_start_time, daily_end_time 
       FROM users 
       WHERE LOWER(role) IN ('admin', 'permanent', 'monitor') 
     `;
@@ -653,7 +710,7 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     await client.query(`DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ${monitorFilterDelete}`, paramsDelete);
     
     const defs = await client.query("SELECT * FROM slot_definitions WHERE COALESCE(plan_name, 'Standard') = $1", [plan]);
-    const mons = await client.query(`SELECT id FROM users WHERE is_active_monitor = true AND status = 'Actif' ${monitorFilterSelect}`, paramsSelect);
+    const mons = await client.query(`SELECT id, available_start_date, available_end_date, daily_start_time, daily_end_time FROM users WHERE is_active_monitor = true AND status = 'Actif' ${monitorFilterSelect}`, paramsSelect);
     
     let curr = new Date(startDate);
     const last = new Date(endDate);
@@ -672,12 +729,24 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
             
-            placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
-            values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
-            
-            paramIndex += 5; 
+            const avails = await client.query('SELECT * FROM monitor_availabilities WHERE user_id = $1', [m.id]);
+              const isAuthorized = avails.rows.some(a => {
+                const startD = new Date(a.start_date);
+                const endD = new Date(a.end_date);
+                const isDateOk = curr >= startD && curr <= endD;
+                const isTimeOk = (!a.daily_start_time || d.start_time >= a.daily_start_time) && 
+                                 (!a.daily_end_time || d.start_time < a.daily_end_time);
+                return isDateOk && isTimeOk;
+              });
+
+              if (avails.rows.length > 0 && !isAuthorized) continue;
+              
+              placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
+              values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
+              
+              paramIndex += 5; 
+            }
           }
-        }
       }
       curr.setDate(curr.getDate() + 1);
     }
