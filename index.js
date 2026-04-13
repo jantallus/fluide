@@ -385,14 +385,25 @@ app.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 🎯 1. ON SÉCURISE L'AFFICHAGE DES COLONNES DU CALENDRIER
 app.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
-    const r = await pool.query(`
+    let query = `
       SELECT id, first_name, email, role, is_active_monitor, status 
       FROM users 
       WHERE LOWER(role) IN ('admin', 'permanent', 'monitor') 
-      ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, first_name ASC
-    `);
+    `;
+    let params = [];
+
+    // 🔒 Si c'est un moniteur journée, il ne verra que SA propre colonne
+    if (req.user.role === 'monitor') {
+      query += ` AND id = $1`;
+      params.push(req.user.id);
+    }
+
+    query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, first_name ASC`;
+    
+    const r = await pool.query(query, params);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -490,18 +501,72 @@ app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
 });
 
 // --- PLANNING & SLOTS ---
-app.get('/api/slots', async (req, res) => {
+// 🎯 2. ON SÉCURISE LE TÉLÉCHARGEMENT DES CRÉNEAUX
+app.get('/api/slots', authenticateUser, async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM slots ORDER BY start_time ASC');
+    let query = 'SELECT * FROM slots ORDER BY start_time ASC';
+    let params = [];
+    
+    // 🔒 Le moniteur journée ne télécharge que ses propres données
+    if (req.user.role === 'monitor') {
+      query = 'SELECT * FROM slots WHERE monitor_id = $1 ORDER BY start_time ASC';
+      params = [req.user.id];
+    }
+    
+    const r = await pool.query(query, params);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 🎯 3. LE VERROU HERMÉTIQUE DES ACTIONS SUR LE CALENDRIER
 app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
-  const { title, weight, flight_type_id, notes, status, monitor_id, phone, email, weightChecked, booking_options, client_message } = req.body;
+  let { title, weight, flight_type_id, notes, status, monitor_id, phone, email, weightChecked, booking_options, client_message } = req.body;
   const slotId = req.params.id;
 
   try {
+    // --- 🛡️ VÉRIFICATIONS DE SÉCURITÉ ---
+    
+    // RÈGLE 1 : Le moniteur à la journée ne peut STRICTEMENT rien modifier
+    if (req.user.role === 'monitor') {
+      return res.status(403).json({ error: "Mode lecture seule : Vous ne pouvez pas modifier le planning." });
+    }
+
+    // RÈGLE 2 : Les droits du Moniteur Permanent
+    if (req.user.role === 'permanent') {
+      const checkRes = await pool.query('SELECT monitor_id, title, status FROM slots WHERE id = $1', [slotId]);
+      
+      if (checkRes.rows.length > 0) {
+        const slot = checkRes.rows[0];
+        
+        // A. Il ne peut agir que sur sa propre colonne
+        if (slot.monitor_id !== req.user.id) {
+          return res.status(403).json({ error: "Vous ne pouvez agir que sur votre propre planning." });
+        }
+        
+        // B. Il ne peut pas toucher aux vraies réservations clients
+        const isClientSlot = slot.status === 'booked' && slot.title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => slot.title.includes(t)) && !slot.title.includes('❌');
+        const isMakingClientSlot = status === 'booked' && title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => title.includes(t)) && !title.includes('❌');
+        
+        if (isClientSlot || isMakingClientSlot) {
+          return res.status(403).json({ error: "Les moniteurs permanents ne peuvent pas modifier les réservations clients." });
+        }
+
+        // C. Il ne peut pas retirer un blocage posé par un Admin
+        if (slot.title && slot.title.includes('(Admin)')) {
+          return res.status(403).json({ error: "Action refusée : Ce créneau est verrouillé par la Direction." });
+        }
+      }
+    }
+
+    // RÈGLE 3 : Le Super-Pouvoir de l'Admin
+    // Si un Admin pose un blocage (NON DISPO ou PAUSE), on ajoute le mot (Admin) en secret
+    // pour que les permanents ne puissent plus l'enlever !
+    if (req.user.role === 'admin' && (title === 'NON DISPO' || title === '☕ PAUSE')) {
+      title = `${title} (Admin)`;
+    }
+    // ------------------------------------
+
+    // Si toutes les sécurités sont passées, on applique la modification
     const result = await pool.query(
       `UPDATE slots 
        SET title = $1, 
