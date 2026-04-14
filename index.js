@@ -636,7 +636,10 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
            email = $9,
            weight_checked = $10,
            booking_options = $11,
-           client_message = $12
+           client_message = $12,
+           -- 🎯 LA CORRECTION EST ICI :
+           -- On garde le payment_status actuel s'il n'est pas fourni dans la requête
+           payment_status = COALESCE($13, payment_status)
        WHERE id = $7
        RETURNING *`, 
       [
@@ -651,7 +654,8 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
         email !== undefined ? email : null,
         weightChecked !== undefined ? weightChecked : false,
         booking_options !== undefined ? booking_options : null,
-        client_message !== undefined ? client_message : null
+        client_message !== undefined ? client_message : null,
+        req.body.payment_status !== undefined ? req.body.payment_status : null // $13
       ]
     );
 
@@ -1374,7 +1378,9 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
     let isFirstSlot = true;
     for (const slot of slotsToBook) {
       // 🎯 MODIFIÉ : On affiche désormais le Prénom et le NOM (en majuscules)
-      const fullName = `${p.firstName} ${contact.lastName.toUpperCase()}`;
+      // On vérifie si contact.lastName existe avant de faire le toUpperCase()
+      const lastName = contact.lastName ? contact.lastName.toUpperCase() : "";
+      const fullName = `${p.firstName} ${lastName}`.trim();
       
       const slotTitle = isFirstSlot ? fullName : `↪️ Suite ${fullName}`;
       const slotNotes = isFirstSlot ? null : 'Extension auto';
@@ -1546,11 +1552,10 @@ app.post('/api/public/confirm-booking', async (req, res) => {
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 
   if (session_id.startsWith('GRATUIT_')) {
-      return res.json({ success: true, message: "Réservation validée via code 100%" });
+      return res.json({ success: true });
   }
 
   const client = await pool.connect(); 
-
   try {
     const session = await stripe.checkout.sessions.retrieve(session_id);
     if (session.payment_status !== 'paid') {
@@ -1559,72 +1564,34 @@ app.post('/api/public/confirm-booking', async (req, res) => {
 
     await client.query('BEGIN'); 
 
-    // 🎁 // 🎁 CAS 1 : C'EST L'ACHAT D'UN BON CADEAU !
+    // --- CAS 1 : ACHAT BON CADEAU ---
     if (session.metadata.purchase_type === 'gift_card') {
       const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-      
-      // Calcul de la date d'expiration
       const validUntil = new Date();
       validUntil.setMonth(validUntil.getMonth() + parseInt(session.metadata.validity_months || 12));
 
       await client.query(
-        `INSERT INTO gift_cards 
-        (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes) 
-        VALUES ($1, $2, $3, $4, $5, 'gift_card', 'valid', 'both', $6, $7)`,
-        [
-          finalCode, 
-          session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null,
-          session.metadata.buyer_name,
-          session.metadata.beneficiary_name,
-          parseInt(session.metadata.price_paid_cents),
-          validUntil,
-          session.metadata.image_url || '' 
-        ]
+        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes) 
+         VALUES ($1, $2, $3, $4, $5, 'gift_card', 'valid', 'both', $6, $7)`,
+        [finalCode, session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, session.metadata.buyer_name, session.metadata.beneficiary_name, parseInt(session.metadata.price_paid_cents), validUntil, session.metadata.image_url || '']
       );
 
-      const isSpecificFlight = session.metadata.flight_type_id ? true : false;
-      const giftName = isSpecificFlight ? "Vol en parapente" : `Avoir d'une valeur de ${session.metadata.price_paid_cents / 100}€`;
+      await client.query('COMMIT');
 
-      // 🎁 CRÉATION DU PDF POUR LA PIÈCE JOINTE
-      const voucherForPdf = {
-        code: finalCode,
-        beneficiary_name: session.metadata.beneficiary_name,
-        buyer_name: session.metadata.buyer_name,
-        price_paid_cents: session.metadata.price_paid_cents,
-        flight_name: isSpecificFlight ? "Vol en parapente" : null,
-        notes: session.metadata.image_url
-      };
-      
-      let pdfBuffer = null;
-      try {
-         pdfBuffer = await generatePDFBuffer(voucherForPdf);
-      } catch (e) {
-         console.error("Erreur génération PDF joint :", e);
-      }
-      
-      // 💌 ENVOI EMAIL DU BON CADEAU AVEC LA PIÈCE JOINTE
-      await sendConfirmationEmail(
-        session.metadata.buyer_email,
-        session.metadata.buyer_name,
-        'gift_card',
-        giftName,
-        finalCode, 
-        "",
-        null,
-        pdfBuffer // 👈 ON PASSE LE PDF ICI !
-      );
+      // 📧 ENVOI ASYNCHRONE (Ne bloque pas la réponse au client)
+      setImmediate(async () => {
+        try {
+          const isSpecific = !!session.metadata.flight_type_id;
+          const pdfBuf = await generatePDFBuffer({ code: finalCode, beneficiary_name: session.metadata.beneficiary_name, buyer_name: session.metadata.buyer_name, price_paid_cents: session.metadata.price_paid_cents, flight_name: isSpecific ? "Vol en parapente" : null, notes: session.metadata.image_url });
+          await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${session.metadata.price_paid_cents/100}€`, finalCode, "", null, pdfBuf);
+        } catch (e) { console.error("❌ Erreur notifications Bon Cadeau:", e); }
+      });
 
-      await client.query('COMMIT'); 
       return res.json({ success: true, is_gift_card: true, code: finalCode });
     }
 
-    // 🪂 CAS 2 : C'EST UNE RÉSERVATION DE VOL CLASSIQUE
-    const contact = {
-      phone: session.metadata.contact_phone,
-      email: session.metadata.contact_email,
-      notes: session.metadata.contact_notes
-    };
-
+    // --- CAS 2 : RÉSERVATION VOL ---
+    const contact = { phone: session.metadata.contact_phone || '', email: session.metadata.contact_email || '', notes: session.metadata.contact_notes || '' };
     let passengersJson = '';
     let chunkIndex = 0;
     while (session.metadata[`passengers_chunk_${chunkIndex}`] !== undefined) {
@@ -1633,65 +1600,34 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     }
     const passengers = JSON.parse(passengersJson);
     
-    // 1. On réserve les créneaux
-    // 🎯 NOUVEAU : On détecte si c'est un paiement pur CB ou avec un code promo partiel
-    let pStatus = 'Payé (CB en ligne)';
-    if (session.metadata.voucher_code) {
-       pStatus = `Payé (CB + Promo : ${session.metadata.voucher_code})`;
-    }
+    let pStatus = session.metadata.voucher_code ? `Payé (CB + Promo : ${session.metadata.voucher_code})` : 'Payé (CB en ligne)';
+    
+    // 1. Enregistrement BDD
     await performBooking(client, contact, passengers, pStatus);
 
-    // 💌 ENVOI DE L'EMAIL DE CONFIRMATION DE VOL
-    if (passengers.length > 0) {
-      const firstPass = passengers[0];
-      const flightDateObj = new Date(firstPass.date);
-      const beautifulDate = flightDateObj.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-
-      await sendConfirmationEmail(
-        contact.email,
-        session.metadata.contact_name,
-        'flight',              
-        firstPass.flightName,  
-        beautifulDate,
-        firstPass.time,
-        firstPass.flightId
-      );
-      
-      await sendConfirmationSMS(
-        contact.phone, 
-        session.metadata.contact_name, 
-        'flight', 
-        beautifulDate, 
-        firstPass.time,
-        firstPass.flightId
-      );
-
-      await sendAdminNotificationEmail(
-        session.metadata.contact_name,
-        contact.phone,
-        firstPass.flightName,
-        beautifulDate,
-        firstPass.time
-      );
-    }
-
-    // 2. On grille le bon cadeau ou le code promo (s'il y en avait un)
-    const voucherCode = session.metadata.voucher_code;
-    if (voucherCode) {
-        await client.query(`
-          UPDATE gift_cards 
-          SET current_uses = current_uses + 1,
-              status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END
-          WHERE UPPER(code) = UPPER($1)
-        `, [voucherCode]);
+    if (session.metadata.voucher_code) {
+        await client.query(`UPDATE gift_cards SET current_uses = current_uses + 1, status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END WHERE UPPER(code) = UPPER($1)`, [session.metadata.voucher_code]);
     }
 
     await client.query('COMMIT'); 
     res.json({ success: true });
 
+    // 📧 NOTIFICATIONS ASYNCHRONES (Après le succès BDD)
+    setImmediate(async () => {
+      try {
+        if (passengers.length > 0) {
+          const firstPass = passengers[0];
+          const beautifulDate = new Date(firstPass.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+          await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
+          await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
+          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
+        }
+      } catch (e) { console.error("❌ Erreur notifications Vol:", e); }
+    });
+
   } catch (err) {
     await client.query('ROLLBACK'); 
-    console.error("Erreur validation Stripe :", err);
+    console.error("❌ ERREUR CRITIQUE CONFIRMATION:", err);
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
