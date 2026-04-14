@@ -663,6 +663,81 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   }
 });
 
+// 🎯 4. MODIFICATION RAPIDE (PAIEMENT ET PILOTE) DEPUIS L'ANNUAIRE
+app.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
+  const { payment_status, monitor_id } = req.body;
+  const client = await pool.connect(); 
+  
+  try {
+    await client.query('BEGIN');
+    
+    // On récupère le créneau actuel du client
+    const currentSlotRes = await client.query('SELECT * FROM slots WHERE id = $1', [req.params.id]);
+    if (currentSlotRes.rows.length === 0) throw new Error("Créneau introuvable");
+    const currentSlot = currentSlotRes.rows[0];
+
+    // 1. Mettre à jour le paiement si fourni
+    if (payment_status !== undefined) {
+       await client.query('UPDATE slots SET payment_status = $1 WHERE id = $2', [payment_status, req.params.id]);
+    }
+
+    // 2. Changement de Pilote (La technique des Chaises Musicales 🪑)
+    if (monitor_id !== undefined) {
+       const targetMonitor = monitor_id || null;
+
+       // Si on l'attribue vraiment à un nouveau pilote
+       if (targetMonitor && targetMonitor !== currentSlot.monitor_id) {
+         
+         // On cherche si le nouveau pilote a déjà un créneau à cette heure exacte
+         const targetSlotRes = await client.query(
+           'SELECT * FROM slots WHERE monitor_id = $1 AND start_time = $2',
+           [targetMonitor, currentSlot.start_time]
+         );
+
+         if (targetSlotRes.rows.length > 0) {
+            const targetSlot = targetSlotRes.rows[0];
+
+            // Si le créneau du nouveau pilote est un vrai client, on bloque l'action !
+            if (targetSlot.status !== 'available' && targetSlot.title !== 'NOTE') {
+               throw new Error("Ce pilote a déjà un vol prévu à cette heure-là !");
+            }
+
+            // 🔄 LE FAMEUX SWAP DES MONITEURS (Aucune suppression, juste un échange)
+            // a) On met le créneau vide du nouveau pilote en "suspendu" (NULL)
+            await client.query('UPDATE slots SET monitor_id = NULL WHERE id = $1', [targetSlot.id]);
+            
+            // b) On donne le créneau du client au nouveau pilote
+            await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [targetMonitor, currentSlot.id]);
+            
+            // c) On donne le créneau vide à l'ancien pilote pour boucher le trou dans son planning !
+            await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [currentSlot.monitor_id, targetSlot.id]);
+         
+         } else {
+            // S'il n'avait pas de créneau du tout à cette heure là, on transfère simplement
+            await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [targetMonitor, currentSlot.id]);
+         }
+       } 
+       // Si on désattribue simplement le vol (Option "Pilote...")
+       else if (!targetMonitor) {
+         await client.query('UPDATE slots SET monitor_id = NULL WHERE id = $1', [currentSlot.id]);
+       }
+    }
+
+    await client.query('COMMIT');
+    
+    // On renvoie le créneau mis à jour à l'interface
+    const finalSlot = await client.query('SELECT * FROM slots WHERE id = $1', [req.params.id]);
+    res.json(finalSlot.rows[0]);
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error("ERREUR QUICK PATCH SLOT:", err);
+    res.status(400).json({ error: err.message }); // L'interface affichera joliment l'alerte
+  } finally {
+    client.release();
+  }
+});
+
 // --- GÉNÉRATION HERMÉTIQUE DES CRÉNEAUX (VERSION TURBO + SÉCURITÉ) ---
 app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
   const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
@@ -906,29 +981,49 @@ app.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- CLIENTS (Annuaire Dynamique depuis le Calendrier 🚀) ---
+// --- CLIENTS (Annuaire Dynamique & Historique Complet 🚀) ---
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT 
-        MAX(id) as id,
-        title as first_name,
+        MAX(s.id) as id,
+        s.title as first_name,
         '' as last_name,
-        MAX(email) as email,
-        MAX(phone) as phone,
-        MAX(weight) as weight,
-        MAX(start_time) as last_flight_date,
-        (array_agg(payment_status ORDER BY start_time DESC))[1] as payment_status
-      FROM slots
-      WHERE status = 'booked' 
-        AND title IS NOT NULL 
-        AND title != 'NOTE'
-        AND title NOT LIKE '☕%' 
-        AND title NOT LIKE '%NON DISPO%' 
-        AND title NOT LIKE '↪️ Suite%'
-        AND title NOT LIKE '%❌%'
-      GROUP BY title
-      ORDER BY last_flight_date DESC
+        MAX(s.email) as email,
+        MAX(s.phone) as phone,
+        MAX(CASE WHEN s.start_time >= NOW() THEN 1 ELSE 0 END) as has_upcoming,
+        
+        -- 🎯 NOUVEAU : On crée un tableau JSON contenant tout l'historique du client
+        json_agg(
+          json_build_object(
+            'id', s.id,
+            'start_time', s.start_time,
+            'payment_status', s.payment_status,
+            'monitor_name', COALESCE(u.first_name, 'Non assigné'),
+            'monitor_id', s.monitor_id,
+            'flight_name', COALESCE(ft.name, 'Vol personnalisé'),
+            'price_cents', COALESCE(ft.price_cents, 0)
+          ) ORDER BY 
+            -- 1. Les vols futurs en premier (0)
+            CASE WHEN s.start_time >= NOW() THEN 0 ELSE 1 END ASC,
+            -- 2. Parmi les futurs : du plus proche au plus lointain
+            CASE WHEN s.start_time >= NOW() THEN s.start_time END ASC,
+            -- 3. Parmi les passés : du plus récent au plus ancien
+            CASE WHEN s.start_time < NOW() THEN s.start_time END DESC
+        ) as flights
+
+      FROM slots s
+      LEFT JOIN users u ON s.monitor_id = u.id
+      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
+      WHERE s.status = 'booked' 
+        AND s.title IS NOT NULL 
+        AND s.title != 'NOTE'
+        AND s.title NOT LIKE '☕%' 
+        AND s.title NOT LIKE '%NON DISPO%' 
+        AND s.title NOT LIKE '↪️ Suite%'
+        AND s.title NOT LIKE '%❌%'
+      GROUP BY s.title
+      ORDER BY has_upcoming DESC, MAX(s.start_time) DESC
     `);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1692,6 +1787,60 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).send("Erreur lors de la génération du bon cadeau.");
     }
+  }
+});
+
+// 🗑️ 1. SUPPRIMER UN VOL UNIQUE (Nettoyage intégral)
+app.delete('/api/slots/:id', authenticateUser, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE slots 
+       SET status = 'available', 
+           payment_status = NULL, 
+           title = NULL, 
+           notes = NULL,
+           phone = NULL,
+           email = NULL,
+           booking_options = NULL,   -- 🎯 On vide l'option Photo/Vidéo
+           client_message = NULL,    -- 🎯 On vide les notes du client
+           flight_type_id = NULL,
+           weight_checked = false,
+           weight = NULL             -- 🎯 On vide aussi le poids si présent
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ ERREUR DELETE SLOT:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🧹 2. SUPPRESSION MASSIVE (Nettoyage intégral)
+app.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
+  const { ids } = req.body;
+  if (!ids || ids.length === 0) return res.status(400).json({ error: "Aucun ID" });
+
+  try {
+    await pool.query(
+      `UPDATE slots 
+       SET status = 'available', 
+           payment_status = NULL, 
+           title = NULL,
+           phone = NULL,
+           email = NULL,
+           notes = NULL,
+           booking_options = NULL,   -- 🎯 Nettoyage ici aussi
+           client_message = NULL,    -- 🎯 Nettoyage ici aussi
+           flight_type_id = NULL,
+           weight = NULL
+       WHERE id = ANY($1::int[])`, 
+      [ids]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ ERREUR BULK DELETE:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
