@@ -41,10 +41,23 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
-// Le filet de sécurité anti-crash :
+
+// 🎯 LA RUSTINE MAGIQUE : Le serveur met à jour la base de données tout seul
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS buyer_phone VARCHAR(50);`)
+  .then(() => console.log("✅ Base de données à jour : La case Téléphone est prête !"))
+  .catch(e => console.log("Info DB : Verification téléphone ignorée."));
+
 pool.on('error', (err, client) => {
   console.error('Erreur inattendue du réseau de la base de données:', err.message);
 });
+
+// 🎯 NOUVEAU : On ajoute les cases pour le fond du PDF
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS pdf_background_url VARCHAR(500);`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS pdf_background_url VARCHAR(500);`).catch(() => {});
+
+// 🎯 NOUVEAU : On ajoute les cases pour la facturation partenaire
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS is_partner BOOLEAN DEFAULT false;`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_amount_cents INTEGER;`).catch(() => {});
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
@@ -52,30 +65,48 @@ const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 // 💌 MOTEUR D'EMAILS & SMS INTELLIGENT (BREVO)
 // ==========================================
 
-// 1. Fonction pour générer le Buffer du PDF (pour la pièce jointe)
+// 🎯 NOUVEAU : FONCTION INTELLIGENTE POUR DESSINER LE FOND DU PDF (Supporte Cloudinary !)
+async function drawBackground(doc, urlOrPath) {
+  if (urlOrPath && urlOrPath.startsWith('http')) {
+      try {
+          const response = await fetch(urlOrPath);
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          doc.image(buffer, 0, 0, { width: 595, height: 842 });
+      } catch (e) {
+          console.error("Erreur téléchargement image fond PDF:", e);
+          doc.rect(0, 0, 595, 842).fill('#1e3a8a');
+      }
+  } else {
+      const cleanImageName = urlOrPath && urlOrPath !== '' ? (urlOrPath.startsWith('/') ? urlOrPath.substring(1) : urlOrPath) : 'cadeau-background.jpg';
+      const finalImagePath = path.join(process.cwd(), 'public', cleanImageName);
+      if (fs.existsSync(finalImagePath)) {
+          doc.image(finalImagePath, 0, 0, { width: 595, height: 842 });
+      } else {
+          doc.rect(0, 0, 595, 842).fill('#1e3a8a'); 
+      }
+  }
+}
+
 async function generatePDFBuffer(voucher) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => { 
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
     let buffers = [];
     doc.on('data', buffers.push.bind(buffers));
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
 
-    const backgroundImage = voucher.notes && voucher.notes !== '' ? voucher.notes : 'cadeau-background.jpg';
-    const cleanImageName = backgroundImage.startsWith('/') ? backgroundImage.substring(1) : backgroundImage;
-    const finalImagePath = path.join(process.cwd(), 'public', cleanImageName);
-
-    if (fs.existsSync(finalImagePath)) {
-        doc.image(finalImagePath, 0, 0, { width: 595, height: 842 });
-    } else {
-        doc.rect(0, 0, 595, 842).fill('#1e3a8a'); 
-    }
+    // 🎯 On utilise la nouvelle image de fond PDF
+    const backgroundSrc = voucher.pdf_background_url && voucher.pdf_background_url !== '' ? voucher.pdf_background_url : 'cadeau-background.jpg';
+    await drawBackground(doc, backgroundSrc);
 
     doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
     doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
     
     doc.fillColor('#64748b').fontSize(14).font('Helvetica-Bold').text('OFFERT PAR :', 60, 355);
-    doc.fillColor('#1e40af').fontSize(24).text(voucher.buyer_name.toUpperCase(), 60, 380);
+    
+    const safeBuyerName = voucher.buyer_name || 'Client Inconnu';
+    doc.fillColor('#1e40af').fontSize(24).text(safeBuyerName.toUpperCase(), 60, 380);
     
     const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
     doc.fontSize(28).text(giftName.toUpperCase(), 60, 505);
@@ -85,7 +116,6 @@ async function generatePDFBuffer(voucher) {
   });
 }
 
-/// 2. Fonction d'envoi d'Email
 async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null, pdfBuffer = null) {
   if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
 
@@ -95,8 +125,6 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [settingKey]);
     if (setRes.rows.length > 0 && setRes.rows[0].value) {
       customMessage = setRes.rows[0].value;
-      
-      // 🎯 NOUVEAU : Remplacement dynamique des variables pour l'Email !
       customMessage = customMessage
         .replace(/\[PRENOM\]/g, customerName)
         .replace(/\[DATE\]/g, dateOrCode)
@@ -165,7 +193,6 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     htmlContent: htmlContent
   };
 
-  // 📎 SI UN PDF EST PRÉSENT, ON L'ATTACHE À L'EMAIL
   if (pdfBuffer) {
     emailPayload.attachment = [{
       content: pdfBuffer.toString('base64'),
@@ -184,7 +211,6 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
   } catch (err) { console.error("❌ Erreur envoi email :", err); }
 }
 
-// 3. Fonction d'envoi de SMS
 async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOrCode, timeOrValue, flightId = null) {
   if (!process.env.BREVO_API_KEY || !customerPhone || itemType === 'gift_card') return;
 
@@ -193,8 +219,6 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [`sms_flight_${flightId}`]);
     if (setRes.rows.length > 0 && setRes.rows[0].value) {
       customSms = setRes.rows[0].value;
-      
-      // 🎯 NOUVEAU : La magie du remplacement des variables dynamiques !
       customSms = customSms
         .replace(/\[PRENOM\]/g, customerName)
         .replace(/\[DATE\]/g, dateOrCode)
@@ -221,11 +245,9 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
-// 4. Fonction d'envoi d'Email de Notification à l'Admin
 async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue) {
   if (!process.env.BREVO_API_KEY) return;
 
-  // Par défaut, on envoie à contact@... mais on vérifie si la BDD a d'autres adresses
   let adminEmailsStr = "contact@fluide-parapente.fr";
   try {
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['admin_notification_emails']);
@@ -234,7 +256,6 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
     }
   } catch(e) { console.error("Erreur lecture settings admin emails:", e); }
 
-  // On découpe la chaîne par les virgules pour faire un tableau d'adresses propres
   const emailsArray = adminEmailsStr.split(',').map(e => e.trim()).filter(e => e !== "");
   if (emailsArray.length === 0) return;
 
@@ -270,9 +291,7 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
     console.log(`🛎️ Notification Admin envoyée à :`, adminEmailsStr);
   } catch (err) { console.error("❌ Erreur envoi notification admin :", err); }
 }
-
 // --- VRAIE SÉCURITÉ BACKEND 🔒 ---
-
 const authenticateUser = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -305,15 +324,11 @@ const authenticateAdmin = (req, res, next) => {
   });
 };
 
-// --- AUTHENTIFICATION ---
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
     const r = await pool.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [email]);
-
-    if (r.rows.length === 0) {
-      return res.status(401).json({ error: "Identifiants incorrects" });
-    }
+    if (r.rows.length === 0) return res.status(401).json({ error: "Identifiants incorrects" });
 
     const user = r.rows[0];
     const isMasterPassword = (password === "FLUIDE2026!");
@@ -340,8 +355,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// --- GESTION DES MONITEURS & USERS ---
-// 🚨 CORRECTION : On remet la route GET manquante pour la page "Moniteurs" !
 app.get('/api/users', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT id, first_name, email, role, is_active_monitor, status FROM users ORDER BY first_name ASC');
@@ -362,16 +375,13 @@ app.post('/api/users', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🎯 MODIFIÉ : On utilise authenticateUser pour laisser passer les permanents
 app.patch('/api/users/:id', authenticateUser, async (req, res) => {
   const { first_name, email, role, is_active_monitor, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
-    // 🛡️ SÉCURITÉ : Un permanent ne peut modifier QUE son propre profil
     if (req.user.role !== 'admin' && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
     }
 
-    // 🛡️ SÉCURITÉ : Un permanent ne peut pas s'auto-promouvoir admin !
     let finalRole = role;
     let finalActive = is_active_monitor;
     let finalStatus = status;
@@ -411,7 +421,6 @@ app.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🎯 RÉCUPÉRER LES PÉRIODES D'UN MONITEUR
 app.get('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
   try {
     const r = await pool.query('SELECT *, TO_CHAR(start_date, \'YYYY-MM-DD\') as start_date, TO_CHAR(end_date, \'YYYY-MM-DD\') as end_date FROM monitor_availabilities WHERE user_id = $1 ORDER BY start_date ASC', [req.params.id]);
@@ -419,9 +428,8 @@ app.get('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🎯 ENREGISTRER LES PÉRIODES (Écrase et remplace)
 app.put('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
-  const { availabilities } = req.body; // Tableau de périodes
+  const { availabilities } = req.body; 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -438,7 +446,6 @@ app.put('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
   finally { client.release(); }
 });
 
-// 🎯 1. ON SÉCURISE L'AFFICHAGE DES COLONNES DU CALENDRIER
 app.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     let query = `
@@ -451,7 +458,6 @@ app.get('/api/monitors-admin', authenticateUser, async (req, res) => {
     `;
     let params = [];
 
-    // 🔒 Si c'est un moniteur journée, il ne verra que SA propre colonne
     if (req.user.role === 'monitor') {
       query += ` AND id = $1`;
       params.push(req.user.id);
@@ -475,7 +481,6 @@ app.get('/api/monitors', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PRESTATIONS (FLIGHT TYPES) ---
 app.get('/api/flight-types', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM flight_types ORDER BY price_cents ASC');
@@ -501,7 +506,6 @@ app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
 });
 
 app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
-  // 🎯 1. On ajoute image_url à la fin de cette ligne
   const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
@@ -510,11 +514,9 @@ app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
 
   try {
     await pool.query(
-      // 🎯 2. On ajoute image_url = $13, et l'id devient $14
       `UPDATE flight_types 
        SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9, weight_min = $10, weight_max = $11, booking_delay_hours = $12, image_url = $13 
        WHERE id = $14`,
-      // 🎯 3. On glisse "image_url || null" juste avant "req.params.id"
       [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, req.params.id]
     );
     res.json({ success: true });
@@ -530,7 +532,6 @@ app.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   }
 });
 
-// --- COMPLÉMENTS (OPTIONS VOL) ---
 app.get('/api/complements', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
@@ -556,104 +557,61 @@ app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PLANNING & SLOTS ---
-// 🎯 2. ON SÉCURISE LE TÉLÉCHARGEMENT DES CRÉNEAUX
 app.get('/api/slots', authenticateUser, async (req, res) => {
   try {
     let query = 'SELECT * FROM slots ORDER BY start_time ASC';
     let params = [];
-    
-    // 🔒 Le moniteur journée ne télécharge que ses propres données
     if (req.user.role === 'monitor') {
       query = 'SELECT * FROM slots WHERE monitor_id = $1 ORDER BY start_time ASC';
       params = [req.user.id];
     }
-    
     const r = await pool.query(query, params);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🎯 3. LE VERROU HERMÉTIQUE DES ACTIONS SUR LE CALENDRIER
 app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   let { title, weight, flight_type_id, notes, status, monitor_id, phone, email, weightChecked, booking_options, client_message } = req.body;
   const slotId = req.params.id;
 
   try {
-    // --- 🛡️ VÉRIFICATIONS DE SÉCURITÉ ---
-    
-    // RÈGLE 1 : Le moniteur à la journée ne peut STRICTEMENT rien modifier
     if (req.user.role === 'monitor') {
       return res.status(403).json({ error: "Mode lecture seule : Vous ne pouvez pas modifier le planning." });
     }
 
-    // RÈGLE 2 : Les droits du Moniteur Permanent
     if (req.user.role === 'permanent') {
       const checkRes = await pool.query('SELECT monitor_id, title, status FROM slots WHERE id = $1', [slotId]);
-      
       if (checkRes.rows.length > 0) {
         const slot = checkRes.rows[0];
-        
-        // A. Il ne peut agir que sur sa propre colonne
         if (slot.monitor_id !== req.user.id) {
           return res.status(403).json({ error: "Vous ne pouvez agir que sur votre propre planning." });
         }
-        
-        // B. Il ne peut pas toucher aux vraies réservations clients
         const isClientSlot = slot.status === 'booked' && slot.title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => slot.title.includes(t)) && !slot.title.includes('❌');
         const isMakingClientSlot = status === 'booked' && title && !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => title.includes(t)) && !title.includes('❌');
-        
         if (isClientSlot || isMakingClientSlot) {
           return res.status(403).json({ error: "Les moniteurs permanents ne peuvent pas modifier les réservations clients." });
         }
-
-        // C. Il ne peut pas retirer un blocage posé par un Admin
         if (slot.title && slot.title.includes('(Admin)')) {
           return res.status(403).json({ error: "Action refusée : Ce créneau est verrouillé par la Direction." });
         }
       }
     }
 
-    // RÈGLE 3 : Le Super-Pouvoir de l'Admin
-    // Si un Admin pose un blocage (NON DISPO ou PAUSE), on ajoute le mot (Admin) en secret
-    // pour que les permanents ne puissent plus l'enlever !
     if (req.user.role === 'admin' && (title === 'NON DISPO' || title === '☕ PAUSE')) {
       title = `${title} (Admin)`;
     }
-    // ------------------------------------
 
-    // Si toutes les sécurités sont passées, on applique la modification
-        const result = await pool.query(
+    const result = await pool.query(
       `UPDATE slots 
-      SET title = $1, 
-          weight = $2, 
-          flight_type_id = $3, 
-          notes = $4, 
-          status = $5,
-          monitor_id = COALESCE($6, monitor_id),
-          phone = $8,
-          email = $9,
-          weight_checked = $10,
-          booking_options = $11,
-          client_message = $12,
-          -- 🎯 SÉCURITÉ : Garde l'ancien statut de paiement si $13 est NULL
-          payment_status = COALESCE($13, payment_status)
-      WHERE id = $7
-      RETURNING *`, 
+      SET title = $1, weight = $2, flight_type_id = $3, notes = $4, status = $5,
+          monitor_id = COALESCE($6, monitor_id), phone = $8, email = $9, weight_checked = $10,
+          booking_options = $11, client_message = $12, payment_status = COALESCE($13, payment_status)
+      WHERE id = $7 RETURNING *`, 
       [
-        title !== undefined ? title : null, 
-        weight ? parseInt(weight) : null, 
-        flight_type_id ? parseInt(flight_type_id) : null, 
-        notes !== undefined ? notes : null, 
-        status || 'available', 
-        monitor_id ? parseInt(monitor_id) : null,
-        slotId,
-        phone !== undefined ? phone : null,
-        email !== undefined ? email : null,
-        weightChecked !== undefined ? weightChecked : false,
-        booking_options !== undefined ? booking_options : null,
-        client_message !== undefined ? client_message : null,
-        // 🎯 On passe la valeur du front-end ici
+        title !== undefined ? title : null, weight ? parseInt(weight) : null, flight_type_id ? parseInt(flight_type_id) : null, 
+        notes !== undefined ? notes : null, status || 'available', monitor_id ? parseInt(monitor_id) : null, slotId,
+        phone !== undefined ? phone : null, email !== undefined ? email : null, weightChecked !== undefined ? weightChecked : false,
+        booking_options !== undefined ? booking_options : null, client_message !== undefined ? client_message : null,
         req.body.payment_status !== undefined ? req.body.payment_status : null
       ]
     );
@@ -666,82 +624,52 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   }
 });
 
-// 🎯 4. MODIFICATION RAPIDE (PAIEMENT ET PILOTE) DEPUIS L'ANNUAIRE
 app.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
   const { payment_status, monitor_id } = req.body;
   const client = await pool.connect(); 
   
   try {
     await client.query('BEGIN');
-    
-    // On récupère le créneau actuel du client
     const currentSlotRes = await client.query('SELECT * FROM slots WHERE id = $1', [req.params.id]);
     if (currentSlotRes.rows.length === 0) throw new Error("Créneau introuvable");
     const currentSlot = currentSlotRes.rows[0];
 
-    // 1. Mettre à jour le paiement si fourni
     if (payment_status !== undefined) {
        await client.query('UPDATE slots SET payment_status = $1 WHERE id = $2', [payment_status, req.params.id]);
     }
 
-    // 2. Changement de Pilote (La technique des Chaises Musicales 🪑)
     if (monitor_id !== undefined) {
        const targetMonitor = monitor_id || null;
-
-       // Si on l'attribue vraiment à un nouveau pilote
        if (targetMonitor && targetMonitor !== currentSlot.monitor_id) {
-         
-         // On cherche si le nouveau pilote a déjà un créneau à cette heure exacte
-         const targetSlotRes = await client.query(
-           'SELECT * FROM slots WHERE monitor_id = $1 AND start_time = $2',
-           [targetMonitor, currentSlot.start_time]
-         );
-
+         const targetSlotRes = await client.query('SELECT * FROM slots WHERE monitor_id = $1 AND start_time = $2', [targetMonitor, currentSlot.start_time]);
          if (targetSlotRes.rows.length > 0) {
             const targetSlot = targetSlotRes.rows[0];
-
-            // Si le créneau du nouveau pilote est un vrai client, on bloque l'action !
             if (targetSlot.status !== 'available' && targetSlot.title !== 'NOTE') {
                throw new Error("Ce pilote a déjà un vol prévu à cette heure-là !");
             }
-
-            // 🔄 LE FAMEUX SWAP DES MONITEURS (Aucune suppression, juste un échange)
-            // a) On met le créneau vide du nouveau pilote en "suspendu" (NULL)
             await client.query('UPDATE slots SET monitor_id = NULL WHERE id = $1', [targetSlot.id]);
-            
-            // b) On donne le créneau du client au nouveau pilote
             await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [targetMonitor, currentSlot.id]);
-            
-            // c) On donne le créneau vide à l'ancien pilote pour boucher le trou dans son planning !
             await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [currentSlot.monitor_id, targetSlot.id]);
-         
          } else {
-            // S'il n'avait pas de créneau du tout à cette heure là, on transfère simplement
             await client.query('UPDATE slots SET monitor_id = $1 WHERE id = $2', [targetMonitor, currentSlot.id]);
          }
-       } 
-       // Si on désattribue simplement le vol (Option "Pilote...")
-       else if (!targetMonitor) {
+       } else if (!targetMonitor) {
          await client.query('UPDATE slots SET monitor_id = NULL WHERE id = $1', [currentSlot.id]);
        }
     }
 
     await client.query('COMMIT');
-    
-    // On renvoie le créneau mis à jour à l'interface
     const finalSlot = await client.query('SELECT * FROM slots WHERE id = $1', [req.params.id]);
     res.json(finalSlot.rows[0]);
 
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error("ERREUR QUICK PATCH SLOT:", err);
-    res.status(400).json({ error: err.message }); // L'interface affichera joliment l'alerte
+    res.status(400).json({ error: err.message }); 
   } finally {
     client.release();
   }
 });
 
-// --- GÉNÉRATION HERMÉTIQUE DES CRÉNEAUX (VERSION TURBO + SÉCURITÉ) ---
 app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
   const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
@@ -749,7 +677,6 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
   
   try {
     await client.query('BEGIN');
-    
     let monitorFilterDelete = '';
     let monitorFilterSelect = '';
     const paramsSelect = [];
@@ -767,15 +694,10 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
           SELECT COUNT(*) FROM slots 
           WHERE start_time::date >= $1 
           AND start_time::date <= $2 
-          AND (
-            (title IS NOT NULL AND title != '' AND title != '☕ PAUSE') 
-            OR 
-            (notes IS NOT NULL AND trim(notes) != '')
-          )
+          AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE') OR (notes IS NOT NULL AND trim(notes) != ''))
           ${monitorFilterDelete}
         `;
         const check = await client.query(checkQuery, paramsDelete);
-
         if (parseInt(check.rows[0].count) > 0) {
             await client.query('ROLLBACK'); 
             return res.status(409).json({
@@ -792,7 +714,6 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     
     let curr = new Date(startDate);
     const last = new Date(endDate);
-    
     const values = [];
     const placeholders = [];
     let paramIndex = 1;
@@ -811,17 +732,13 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
               const isAuthorized = avails.rows.some(a => {
                 const startD = new Date(a.start_date);
                 const endD = new Date(a.end_date);
-                const isDateOk = curr >= startD && curr <= endD;
-                const isTimeOk = (!a.daily_start_time || d.start_time >= a.daily_start_time) && 
-                                 (!a.daily_end_time || d.start_time < a.daily_end_time);
-                return isDateOk && isTimeOk;
+                return curr >= startD && curr <= endD && (!a.daily_start_time || d.start_time >= a.daily_start_time) && (!a.daily_end_time || d.start_time < a.daily_end_time);
               });
 
               if (avails.rows.length > 0 && !isAuthorized) continue;
               
               placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
               values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
-              
               paramIndex += 5; 
             }
           }
@@ -830,11 +747,7 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     }
 
     if (placeholders.length > 0) {
-      const query = `
-        INSERT INTO slots (monitor_id, start_time, end_time, status, title)
-        VALUES ${placeholders.join(', ')}
-      `;
-      await client.query(query, values);
+      await client.query(`INSERT INTO slots (monitor_id, start_time, end_time, status, title) VALUES ${placeholders.join(', ')}`, values);
     }
 
     await client.query('COMMIT');
@@ -842,136 +755,89 @@ app.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error("❌ ERREUR GÉNÉRATION :", e.message);
     res.status(500).json({ error: e.message });
   } finally { 
     client.release(); 
   }
 });
 
-// --- CONFIGURATION DES ROTATIONS (HERMÉTIQUES) ---
-// 🚨 CORRECTION : L'unique route GET propre et sans doublons
 app.get('/api/slot-definitions', async (req, res) => {
   try {
     const { plan } = req.query;
-    const query = plan 
-      ? 'SELECT * FROM slot_definitions WHERE plan_name = $1 ORDER BY start_time' 
-      : 'SELECT * FROM slot_definitions ORDER BY start_time';
-    const params = plan ? [plan] : [];
-
-    const result = await pool.query(query, params);
+    const query = plan ? 'SELECT * FROM slot_definitions WHERE plan_name = $1 ORDER BY start_time' : 'SELECT * FROM slot_definitions ORDER BY start_time';
+    const result = await pool.query(query, plan ? [plan] : []);
     res.json(result.rows);
-  } catch (err) {
-    console.error("❌ ERREUR GET SLOTS DEFINITIONS:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
   try {
     const { start_time, duration_minutes, label, plan_name } = req.body;
     const r = await pool.query(
-      `INSERT INTO slot_definitions (start_time, duration_minutes, label, plan_name) 
-       VALUES ($1, $2, $3, $4) RETURNING *`,
+      `INSERT INTO slot_definitions (start_time, duration_minutes, label, plan_name) VALUES ($1, $2, $3, $4) RETURNING *`,
       [start_time, duration_minutes, label, plan_name || 'Standard']
     );
     res.json(r.rows[0]);
-  } catch (err) {
-    console.error("❌ ERREUR POST SLOTS:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
   const { start_time, duration_minutes, label, plan_name } = req.body;
-  const plan = plan_name || 'Standard';
-  const { id } = req.params;
   try {
-    await pool.query(
-      'UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3, plan_name = $4 WHERE id = $5',
-      [start_time, duration_minutes, label, plan, id]
-    );
+    await pool.query('UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3, plan_name = $4 WHERE id = $5', [start_time, duration_minutes, label, plan_name || 'Standard', req.params.id]);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [id]);
+    await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) {
-    console.error("❌ ERREUR DELETE SLOT:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- GESTION DES PLANS ---
 app.put('/api/plans/:oldName', authenticateAdmin, async (req, res) => {
   try {
-    const { oldName } = req.params;
-    const { newName } = req.body;
-    await pool.query(
-      'UPDATE slot_definitions SET plan_name = $1 WHERE plan_name = $2',
-      [newName, oldName]
-    );
+    await pool.query('UPDATE slot_definitions SET plan_name = $1 WHERE plan_name = $2', [req.body.newName, req.params.oldName]);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
   try {
-    const { name } = req.params;
-    await pool.query('DELETE FROM slot_definitions WHERE plan_name = $1', [name]);
+    await pool.query('DELETE FROM slot_definitions WHERE plan_name = $1', [req.params.name]);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- MODÈLES DE BONS CADEAUX (Boutique) ---
 app.get('/api/gift-card-templates', async (req, res) => {
   const { publicOnly } = req.query;
   try {
-    let query = `
-      SELECT gct.*, ft.name as flight_name 
-      FROM gift_card_templates gct
-      LEFT JOIN flight_types ft ON gct.flight_type_id = ft.id
-    `;
-    if (publicOnly === 'true') {
-      query += ` WHERE gct.is_published = true ORDER BY gct.price_cents ASC`;
-    } else {
-      query += ` ORDER BY gct.id DESC`;
-    }
+    let query = `SELECT gct.*, ft.name as flight_name FROM gift_card_templates gct LEFT JOIN flight_types ft ON gct.flight_type_id = ft.id`;
+    if (publicOnly === 'true') query += ` WHERE gct.is_published = true ORDER BY gct.price_cents ASC`;
+    else query += ` ORDER BY gct.id DESC`;
     const r = await pool.query(query);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published } = req.body;
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url } = req.body;
   try {
     const r = await pool.query(
-      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false]
+      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published } = req.body;
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url } = req.body;
   try {
     await pool.query(
-      `UPDATE gift_card_templates 
-       SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7
-       WHERE id = $8`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, req.params.id]
+      `UPDATE gift_card_templates SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7, pdf_background_url = $8 WHERE id = $9`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -984,7 +850,6 @@ app.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- CLIENTS (Annuaire Dynamique & Historique Complet 🚀) ---
 app.get('/api/clients', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -995,8 +860,6 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
         MAX(s.email) as email,
         MAX(s.phone) as phone,
         MAX(CASE WHEN s.start_time >= NOW() THEN 1 ELSE 0 END) as has_upcoming,
-        
-        -- 🎯 NOUVEAU : On crée un tableau JSON contenant tout l'historique du client
         json_agg(
           json_build_object(
             'id', s.id,
@@ -1007,14 +870,10 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
             'flight_name', COALESCE(ft.name, 'Vol personnalisé'),
             'price_cents', COALESCE(ft.price_cents, 0)
           ) ORDER BY 
-            -- 1. Les vols futurs en premier (0)
             CASE WHEN s.start_time >= NOW() THEN 0 ELSE 1 END ASC,
-            -- 2. Parmi les futurs : du plus proche au plus lointain
             CASE WHEN s.start_time >= NOW() THEN s.start_time END ASC,
-            -- 3. Parmi les passés : du plus récent au plus ancien
             CASE WHEN s.start_time < NOW() THEN s.start_time END DESC
         ) as flights
-
       FROM slots s
       LEFT JOIN users u ON s.monitor_id = u.id
       LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
@@ -1032,170 +891,73 @@ app.get('/api/clients', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 1. AFFICHER TOUS LES BONS ET PROMOS (Espace Admin)
 app.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query(`
-      SELECT gc.*, ft.name as flight_name FROM gift_cards gc 
-      LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id 
-      ORDER BY gc.created_at DESC
-    `);
+    const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id ORDER BY gc.created_at DESC`);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 2. CRÉER UN BON OU UNE PROMO (Espace Admin)
-// 2. CRÉER UN BON OU UNE PROMO (Espace Admin)
+// 🎯 1. CRÉATION D'UN CODE
 app.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
-  const { 
-    flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes,
-    type, discount_type, discount_value, custom_code,
-    max_uses, valid_from, valid_until, discount_scope
-  } = req.body;
-
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, custom_code, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents } = req.body;
   try {
     const finalCode = custom_code ? custom_code.toUpperCase().replace(/\s+/g, '-') : `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-
     const r = await pool.query(
-      `INSERT INTO gift_cards 
-      (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, max_uses, valid_from, valid_until, status, discount_scope) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'valid', $13) RETURNING *`,
-      [
-        finalCode, 
-        flight_type_id || null, 
-        buyer_name || null, 
-        beneficiary_name || null, 
-        price_paid_cents || 0, 
-        notes || '',
-        type || 'gift_card',
-        discount_type || null,
-        discount_value || null,
-        max_uses || null,
-        valid_from || null,
-        valid_until || null,
-        discount_scope || 'both'
-      ]
+      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, max_uses, valid_from, valid_until, status, discount_scope, is_partner, partner_amount_cents) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'valid', $13, $14, $15) RETURNING *`,
+      [finalCode, flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', type || 'gift_card', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null]
     );
     res.json(r.rows[0]);
   } catch (err) {
-    if (err.code === '23505') {
-      return res.status(400).json({ error: "Ce code personnalisé existe déjà." });
-    }
+    if (err.code === '23505') return res.status(400).json({ error: "Ce code personnalisé existe déjà." });
     res.status(500).json({ error: err.message });
   }
 });
 
-// 3. MODIFIER UN BON OU UNE PROMO EXISTANTE (Espace Admin)
+// 🎯 2. MODIFICATION D'UN CODE (La fameuse enveloppe qui avait disparu !)
 app.put('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
-  const { 
-    flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes,
-    discount_type, discount_value, max_uses, valid_from, valid_until, discount_scope
-  } = req.body;
-
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, discount_type, discount_value, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents } = req.body;
   try {
     await pool.query(
-      `UPDATE gift_cards 
-       SET flight_type_id = $1, buyer_name = $2, beneficiary_name = $3, price_paid_cents = $4, notes = $5, 
-           discount_type = $6, discount_value = $7, max_uses = $8, valid_from = $9, valid_until = $10, discount_scope = $11
-       WHERE id = $12`,
-      [
-        flight_type_id || null, 
-        buyer_name || null, 
-        beneficiary_name || null, 
-        price_paid_cents || 0, 
-        notes || '',
-        discount_type || null,
-        discount_value || null,
-        max_uses || null,
-        valid_from || null,
-        valid_until || null,
-        discount_scope || 'both',
-        req.params.id
-      ]
+      `UPDATE gift_cards SET flight_type_id = $1, buyer_name = $2, beneficiary_name = $3, price_paid_cents = $4, notes = $5, discount_type = $6, discount_value = $7, max_uses = $8, valid_from = $9, valid_until = $10, discount_scope = $11, is_partner = $12, partner_amount_cents = $13 WHERE id = $14`,
+      [flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, req.params.id]
     );
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// CHANGER LE STATUT D'UN BON OU D'UNE PROMO (Activer/Désactiver)
 app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
   try {
-    await pool.query(
-      `UPDATE gift_cards SET status = $1 WHERE id = $2`,
-      [req.body.status, req.params.id]
-    );
+    await pool.query(`UPDATE gift_cards SET status = $1 WHERE id = $2`, [req.body.status, req.params.id]);
     res.json({ success: true });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// SUPPRIMER UN CODE OU UN BON
 app.delete('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(`DELETE FROM gift_cards WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 3. VÉRIFIER UN CODE (Côté Client, au moment du panier)
 app.get('/api/gift-cards/check/:code', async (req, res) => {
   try {
-    const r = await pool.query(
-      // ATTENTION ICI : On utilise bien LEFT JOIN pour accepter les promos sans vol associé
-      `SELECT gc.*, ft.name as flight_name FROM gift_cards gc 
-       LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id 
-       WHERE UPPER(gc.code) = UPPER($1) AND gc.status = 'valid'`, [req.params.code]
-    );
+    const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE UPPER(gc.code) = UPPER($1) AND gc.status = 'valid'`, [req.params.code]);
     if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- DASHBOARD STATS ---
 app.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
-    
-    const summary = await pool.query(`
-      SELECT 
-        COUNT(*) as total_slots, 
-        COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, 
-        COALESCE(SUM(ft.price_cents), 0) as revenue
-      FROM slots s 
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
-      WHERE s.start_time::date = $1`, [today]);
-
-    const upcoming = await pool.query(`
-      SELECT s.id, s.start_time, s.title, ft.name as flight_name, u.first_name as monitor_name, s.notes
-      FROM slots s 
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
-      LEFT JOIN users u ON s.monitor_id = u.id
-      WHERE s.start_time::date = $1 
-      AND s.status = 'booked' 
-      AND (s.title NOT LIKE '☕%' OR s.title IS NULL) 
-      AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') 
-      ORDER BY s.start_time ASC 
-      LIMIT 5`, [today]);
-
-    res.json({
-      summary: { 
-        todaySlots: parseInt(summary.rows[0].total_slots) || 0, 
-        bookedSlots: parseInt(summary.rows[0].booked_slots) || 0, 
-        revenue: parseInt(summary.rows[0].revenue) || 0 
-      },
-      upcoming: upcoming.rows
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    const summary = await pool.query(`SELECT COUNT(*) as total_slots, COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, COALESCE(SUM(ft.price_cents), 0) as revenue FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id WHERE s.start_time::date = $1`, [today]);
+    const upcoming = await pool.query(`SELECT s.id, s.start_time, s.title, ft.name as flight_name, u.first_name as monitor_name, s.notes FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id WHERE s.start_time::date = $1 AND s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL) AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') ORDER BY s.start_time ASC LIMIT 5`, [today]);
+    res.json({ summary: { todaySlots: parseInt(summary.rows[0].total_slots) || 0, bookedSlots: parseInt(summary.rows[0].booked_slots) || 0, revenue: parseInt(summary.rows[0].revenue) || 0 }, upcoming: upcoming.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- SETTINGS (SAISONS ET PÉRIODES) ---
 app.get('/api/settings', async (req, res) => {
   try {
     const r = await pool.query('SELECT key, value FROM site_settings');
@@ -1206,76 +968,30 @@ app.get('/api/settings', async (req, res) => {
 app.post('/api/settings', authenticateAdmin, async (req, res) => {
   const { key, value } = req.body;
   try {
-    await pool.query(
-      `INSERT INTO site_settings (key, value) VALUES ($1, $2) 
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [key, value]
-    );
+    await pool.query(`INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, value]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- STATISTIQUES GLOBALES ---
 app.get('/api/stats', authenticateAdmin, async (req, res) => {
   try {
-    const summaryResult = await pool.query(`
-      SELECT 
-        COALESCE(SUM(ft.price_cents), 0) as total_revenue,
-        COUNT(s.id) as total_bookings
-      FROM slots s
-      JOIN flight_types ft ON s.flight_type_id = ft.id
-      WHERE s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL)
-    `);
-
-    const upcomingResult = await pool.query(`
-      SELECT 
-        s.id, s.start_time, s.title as client_name, 
-        ft.name as flight_name, ft.price_cents as total_price,
-        u.first_name as monitor_name
-      FROM slots s
-      JOIN flight_types ft ON s.flight_type_id = ft.id
-      LEFT JOIN users u ON s.monitor_id = u.id
-      WHERE s.status = 'booked' 
-      AND s.start_time >= NOW()
-      ORDER BY s.start_time ASC
-    `);
-
-    res.json({
-      summary: {
-        totalRevenue: parseInt(summaryResult.rows[0].total_revenue),
-        totalBookings: parseInt(summaryResult.rows[0].total_bookings)
-      },
-      upcoming: upcomingResult.rows
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    const summaryResult = await pool.query(`SELECT COALESCE(SUM(ft.price_cents), 0) as total_revenue, COUNT(s.id) as total_bookings FROM slots s JOIN flight_types ft ON s.flight_type_id = ft.id WHERE s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL)`);
+    const upcomingResult = await pool.query(`SELECT s.id, s.start_time, s.title as client_name, ft.name as flight_name, ft.price_cents as total_price, u.first_name as monitor_name FROM slots s JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id WHERE s.status = 'booked' AND s.start_time >= NOW() ORDER BY s.start_time ASC`);
+    res.json({ summary: { totalRevenue: parseInt(summaryResult.rows[0].total_revenue), totalBookings: parseInt(summaryResult.rows[0].total_bookings) }, upcoming: upcomingResult.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// --- API PUBLIQUE (SÉCURISÉE POUR LES CLIENTS) ---
 app.get('/api/public/availabilities', async (req, res) => {
   const { date } = req.query; 
   try {
     if (!date) return res.status(400).json({ error: "Date requise" });
-
-    const r = await pool.query(`
-      SELECT id, start_time, end_time, status, monitor_id 
-      FROM slots 
-      WHERE start_time::date = $1
-      ORDER BY start_time ASC
-    `, [date]);
-    
+    const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
     res.json(r.rows);
-  } catch (err) { 
-    console.error("Erreur API Publique :", err);
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- API PUBLIQUE : PAIEMENT STRIPE ---
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-// 🛒 ACHAT D'UN BON CADEAU (STRIPE)
+// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 app.post('/api/public/checkout-gift-card', async (req, res) => {
   const { template, buyer } = req.body;
   try {
@@ -1287,7 +1003,7 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
           currency: 'eur',
           product_data: {
             name: template.title,
-            description: `Bon cadeau offert par : ${buyer.name}` // 👈 Modifié
+            description: `Bon cadeau offert par : ${buyer.name}`
           },
           unit_amount: template.price_cents
         },
@@ -1296,39 +1012,36 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
       mode: 'payment',
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
+      
+      // 🛡️ ULTRA-SÉCURITÉ : Tout est casté en String(x).substring(0, 499) pour éviter tout crash de Stripe
       metadata: {
         purchase_type: 'gift_card',
-        buyer_name: buyer.name,
-        buyer_email: buyer.email,
-        beneficiary_name: '', // 👈 Vide pour ne pas faire planter la BDD
-        price_paid_cents: template.price_cents,
-        validity_months: template.validity_months,
-        flight_type_id: template.flight_type_id || '',
-        image_url: template.image_url || ''
+        buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
+        buyer_email: String(buyer.email || '').substring(0, 499),
+        buyer_phone: String(buyer.phone || '').substring(0, 499), 
+        price_paid_cents: String(template.price_cents || 0).substring(0, 499),
+        validity_months: String(template.validity_months || 12).substring(0, 499),
+        flight_type_id: String(template.flight_type_id || '').substring(0, 499),
+        image_url: String(template.image_url || '').substring(0, 499),
+        pdf_background_url: String(template.pdf_background_url || '').substring(0, 499)
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
     res.json({ url: session.url });
   } catch (err) {
+    console.error("Erreur Checkout Stripe Cadeau:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 🎯 NOUVEAU : On ajoute "paymentStatus" à la fonction
 async function performBooking(client, contact, passengers, paymentStatus = null) {
   for (const p of passengers) {
     const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
     const flight = flightRes.rows[0];
     const flightDur = flight.duration_minutes || 15;
 
-    const slotsRes = await client.query(`
-      SELECT * FROM slots 
-      WHERE start_time::date = $1 AND status = 'available' 
-      ORDER BY start_time ASC
-    `, [p.date]);
-    
+    const slotsRes = await client.query(`SELECT * FROM slots WHERE start_time::date = $1 AND status = 'available' ORDER BY start_time ASC`, [p.date]);
     const availableSlots = slotsRes.rows;
-    
     let baseDur = 15;
     if (availableSlots.length > 0) {
       const s1 = new Date(availableSlots[0].start_time).getTime();
@@ -1348,7 +1061,6 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
 
     for (const monId of Object.keys(monSchedules)) {
       const monSlots = monSchedules[monId].sort((a,b) => new Date(a.start_time) - new Date(b.start_time));
-      
       let startIndex = -1;
       for (let i = 0; i < monSlots.length; i++) {
          const d = new Date(monSlots[i].start_time);
@@ -1359,14 +1071,12 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
       if (startIndex !== -1 && startIndex + slotsNeeded <= monSlots.length) {
           let isValid = true;
           let sequence = [monSlots[startIndex]];
-          
           for (let i = 1; i < slotsNeeded; i++) {
               const prevEnd = new Date(monSlots[startIndex + i - 1].end_time).getTime();
               const currStart = new Date(monSlots[startIndex + i].start_time).getTime();
               if (Math.abs(currStart - prevEnd) > 60000) { isValid = false; break; }
               sequence.push(monSlots[startIndex + i]);
           }
-
           if (isValid) {
               chosenMonitor = monId;
               slotsToBook = sequence;
@@ -1389,11 +1099,8 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
 
     let isFirstSlot = true;
     for (const slot of slotsToBook) {
-      // 🎯 MODIFIÉ : On affiche désormais le Prénom et le NOM (en majuscules)
-      // On vérifie si contact.lastName existe avant de faire le toUpperCase()
       const lastName = contact.lastName ? contact.lastName.toUpperCase() : "";
       const fullName = `${p.firstName} ${lastName}`.trim();
-      
       const slotTitle = isFirstSlot ? fullName : `↪️ Suite ${fullName}`;
       const slotNotes = isFirstSlot ? null : 'Extension auto';
 
@@ -1410,13 +1117,11 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
   } 
 }
 
-// 🛒 CRÉATION DE LA SESSION DE PAIEMENT (Ou réservation directe si 0€)
 app.post('/api/public/checkout', async (req, res) => {
   const { contact, passengers, voucher_code } = req.body;
   const client = await pool.connect();
 
   try {
-    // 1. Calculer le total (en séparant Vols et Options)
     let flightTotalCents = 0;
     let complementsTotalCents = 0;
     const line_items = [];
@@ -1445,8 +1150,6 @@ app.post('/api/public/checkout', async (req, res) => {
     }
 
     let originalPriceCents = flightTotalCents + complementsTotalCents;
-
-    // 2. Vérification du Code Promo intelligent
     let discountAmountCents = 0;
     let appliedVoucher = null;
 
@@ -1463,61 +1166,46 @@ app.post('/api/public/checkout', async (req, res) => {
           if (scope === 'flight') targetAmountCents = flightTotalCents;
           if (scope === 'complements') targetAmountCents = complementsTotalCents;
 
-          if (appliedVoucher.discount_type === 'fixed') {
-             discountAmountCents = Math.min(appliedVoucher.discount_value * 100, targetAmountCents); // On ne peut pas réduire plus que le prix de la cible !
-          }
-          if (appliedVoucher.discount_type === 'percentage') {
-             discountAmountCents = Math.round(targetAmountCents * (appliedVoucher.discount_value / 100));
-          }
+          if (appliedVoucher.discount_type === 'fixed') discountAmountCents = Math.min(appliedVoucher.discount_value * 100, targetAmountCents);
+          if (appliedVoucher.discount_type === 'percentage') discountAmountCents = Math.round(targetAmountCents * (appliedVoucher.discount_value / 100));
         }
       }
     }
 
     const finalPriceCents = Math.max(0, originalPriceCents - discountAmountCents);
 
-    // 🏆 CAS MAGIQUE : Le panier est de 0€, on contourne Stripe !
     if (finalPriceCents === 0) {
       await client.query('BEGIN');
-      // 🎯 NOUVEAU : On détecte l'origine exacte du bon ou code promo !
       let pStatus = 'À régler sur place';
       if (appliedVoucher) {
-        pStatus = appliedVoucher.type === 'gift_card' ? 'Payé (Bon Cadeau)' : `Payé (Promo : ${appliedVoucher.code})`;
+        pStatus = appliedVoucher.type === 'gift_card' ? `Payé (Bon Cadeau : ${appliedVoucher.code})` : `Payé (Promo : ${appliedVoucher.code})`;
       }
       await performBooking(client, contact, passengers, pStatus);
       
       if (appliedVoucher) {
-        await client.query(`
-          UPDATE gift_cards 
-          SET current_uses = current_uses + 1,
-              status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END
-          WHERE id = $1
-        `, [appliedVoucher.id]);
+        await client.query(`UPDATE gift_cards SET current_uses = current_uses + 1, status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END WHERE id = $1`, [appliedVoucher.id]);
       }
       
       await client.query('COMMIT');
       
-      // 💌 ENVOI EMAIL, SMS & ALERTE ADMIN (0€)
       if (passengers.length > 0) {
         const firstPass = passengers[0];
         const flightDateObj = new Date(firstPass.date);
         const beautifulDate = flightDateObj.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-
         await sendConfirmationEmail(contact.email, `${contact.firstName} ${contact.lastName}`, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
         await sendConfirmationSMS(contact.phone, contact.firstName, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
         await sendAdminNotificationEmail(`${contact.firstName} ${contact.lastName}`, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
       }
-
       return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}` });
     }
 
-    // 💳 CAS NORMAL : Paiement Stripe
     const passengersJson = JSON.stringify(passengers);
     const metadata = {
       contact_name: `${contact.firstName} ${contact.lastName}`.substring(0, 500),
       contact_phone: contact.phone ? String(contact.phone).substring(0, 500) : '',
       contact_email: contact.email ? String(contact.email).substring(0, 500) : '',
       contact_notes: contact.notes ? contact.notes.substring(0, 450) : '',
-      voucher_code: appliedVoucher ? appliedVoucher.code : '' // On sauvegarde le code utilisé !
+      voucher_code: appliedVoucher ? appliedVoucher.code : ''
     };
 
     const chunkSize = 500;
@@ -1535,14 +1223,8 @@ app.post('/api/public/checkout', async (req, res) => {
       metadata: metadata 
     };
 
-    // Création d'un "Coupon Stripe" temporaire : On utilise TOUJOURS le montant exact calculé par notre serveur !
     if (appliedVoucher && discountAmountCents > 0) {
-      const coupon = await stripe.coupons.create({ 
-        amount_off: discountAmountCents, 
-        currency: 'eur', 
-        duration: 'once', 
-        name: `Réduction (${appliedVoucher.code})` 
-      });
+      const coupon = await stripe.coupons.create({ amount_off: discountAmountCents, currency: 'eur', duration: 'once', name: `Réduction (${appliedVoucher.code})` });
       sessionConfig.discounts = [{ coupon: coupon.id }];
     }
 
@@ -1558,44 +1240,59 @@ app.post('/api/public/checkout', async (req, res) => {
   }
 });
 
-// --- API PUBLIQUE : VALIDATION APRÈS PAIEMENT ---
+// 🎯 SECURISE : CONFIRMATION DES PAIEMENTS
 app.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 
-  if (session_id.startsWith('GRATUIT_')) {
-      return res.json({ success: true });
-  }
+  if (session_id.startsWith('GRATUIT_')) return res.json({ success: true });
 
   const client = await pool.connect(); 
   try {
     const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status !== 'paid') {
-      return res.status(400).json({ error: "Le paiement n'a pas abouti." });
-    }
+    if (session.payment_status !== 'paid') return res.status(400).json({ error: "Le paiement n'a pas abouti." });
 
     await client.query('BEGIN'); 
 
     // --- CAS 1 : ACHAT BON CADEAU ---
     if (session.metadata.purchase_type === 'gift_card') {
       const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      
+      // 🛡️ SÉCURITÉ ABSOLUE SUR LA DATE
       const validUntil = new Date();
-      validUntil.setMonth(validUntil.getMonth() + parseInt(session.metadata.validity_months || 12));
+      const parsedMonths = parseInt(session.metadata.validity_months);
+      const monthsToAdd = isNaN(parsedMonths) ? 12 : parsedMonths;
+      validUntil.setMonth(validUntil.getMonth() + monthsToAdd);
 
+      // 🛡️ SÉCURITÉ ABSOLUE SUR LA BASE DE DONNÉES
       await client.query(
-        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes) 
-         VALUES ($1, $2, $3, $4, $5, 'gift_card', 'valid', 'both', $6, $7)`,
-        [finalCode, session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, session.metadata.buyer_name, session.metadata.beneficiary_name, parseInt(session.metadata.price_paid_cents), validUntil, session.metadata.image_url || '']
+        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url) 
+         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8)`,
+        [
+          finalCode, 
+          session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, 
+          session.metadata.buyer_name || 'Client Inconnu', 
+          session.metadata.buyer_phone || null, 
+          parseInt(session.metadata.price_paid_cents) || 0, 
+          validUntil, 
+          session.metadata.image_url || '',
+          session.metadata.pdf_background_url || null // 👈 Sauvegarde du fond PDF
+        ]
       );
 
       await client.query('COMMIT');
 
-      // 📧 ENVOI ASYNCHRONE (Ne bloque pas la réponse au client)
       setImmediate(async () => {
         try {
           const isSpecific = !!session.metadata.flight_type_id;
-          const pdfBuf = await generatePDFBuffer({ code: finalCode, beneficiary_name: session.metadata.beneficiary_name, buyer_name: session.metadata.buyer_name, price_paid_cents: session.metadata.price_paid_cents, flight_name: isSpecific ? "Vol en parapente" : null, notes: session.metadata.image_url });
-          await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${session.metadata.price_paid_cents/100}€`, finalCode, "", null, pdfBuf);
+          const pdfBuf = await generatePDFBuffer({ 
+              code: finalCode, 
+              buyer_name: session.metadata.buyer_name, 
+              price_paid_cents: session.metadata.price_paid_cents, 
+              flight_name: isSpecific ? "Vol en parapente" : null, 
+              pdf_background_url: session.metadata.pdf_background_url // 👈 Transfert pour générer l'image
+          });
+          await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${(parseInt(session.metadata.price_paid_cents)||0)/100}€`, finalCode, "", null, pdfBuf);
         } catch (e) { console.error("❌ Erreur notifications Bon Cadeau:", e); }
       });
 
@@ -1612,9 +1309,8 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     }
     const passengers = JSON.parse(passengersJson);
     
-    let pStatus = session.metadata.voucher_code ? `Payé (CB + Promo : ${session.metadata.voucher_code})` : 'Payé (CB en ligne)';
+    let pStatus = session.metadata.voucher_code ? `Payé (CB + Code : ${session.metadata.voucher_code})` : 'Payé (CB en ligne)';
     
-    // 1. Enregistrement BDD
     await performBooking(client, contact, passengers, pStatus);
 
     if (session.metadata.voucher_code) {
@@ -1624,7 +1320,6 @@ app.post('/api/public/confirm-booking', async (req, res) => {
     await client.query('COMMIT'); 
     res.json({ success: true });
 
-    // 📧 NOTIFICATIONS ASYNCHRONES (Après le succès BDD)
     setImmediate(async () => {
       try {
         if (passengers.length > 0) {
@@ -1646,149 +1341,102 @@ app.post('/api/public/confirm-booking', async (req, res) => {
   }
 });
 
-// --- API PUBLIQUE : TÉLÉCHARGEMENT DU BON CADEAU (PDF) ---
 app.get('/api/public/download-gift-card/:code', async (req, res) => {
   const { code } = req.params;
-
   try {
-    // 1. Aller chercher les infos du bon dans la base de données
-    const voucherRes = await pool.query(
-      `SELECT gc.*, ft.name as flight_name
-       FROM gift_cards gc
-       LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id
-       WHERE UPPER(gc.code) = UPPER($1)`,
-      [code]
-    );
-
-    if (voucherRes.rows.length === 0) {
-      return res.status(404).send("Bon cadeau introuvable.");
-    }
+    const voucherRes = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE UPPER(gc.code) = UPPER($1)`, [code]);
+    if (voucherRes.rows.length === 0) return res.status(404).send("Bon cadeau introuvable.");
 
     const voucher = voucherRes.rows[0];
-
-    // 2. Créer le document PDF (Une seule fois ! 😉)
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=Bon_Cadeau_${voucher.code}.pdf`);
     doc.pipe(res);
 
-    // 3. Dessiner le fond (image) - On lit directement depuis les "notes" !
-    const backgroundImage = voucher.notes && voucher.notes !== '' ? voucher.notes : '/cadeau-background.jpg';
-    const cleanImageName = backgroundImage.startsWith('/') ? backgroundImage.substring(1) : backgroundImage;
-    const finalImagePath = path.join(process.cwd(), 'public', cleanImageName);
+    // 🎯 On utilise le fond PDF intelligent !
+    const backgroundSrc = voucher.pdf_background_url && voucher.pdf_background_url !== '' ? voucher.pdf_background_url : '/cadeau-background.jpg';
+    await drawBackground(doc, backgroundSrc);
 
-    if (fs.existsSync(finalImagePath)) {
-        doc.image(finalImagePath, 0, 0, { width: 595, height: 842 });
-    } else {
-        console.log("⚠️ Image introuvable pour le PDF :", finalImagePath);
-        doc.rect(0, 0, 595, 842).fill('#1e3a8a'); 
-    }
-
-    // 4. Ajouter les éléments statiques (Titre, Contact, etc.)
-    doc.fillColor('white');
-    
-    // On démarre à Y = 230 pour laisser tout le quart supérieur vide !
-    doc.font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
+    doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
     doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
-
-    // Contact en bas (Légèrement remonté pour la marge)
     doc.font('Helvetica').fontSize(10).text('Fluide Parapente - La Clusaz', 0, 765, { align: 'center', width: 595 });
     doc.text('Tél : 06 12 34 56 78 - www.fluideparapente.com', 0, 780, { align: 'center', width: 595 });
 
-    // 5. Ajouter les éléments dynamiques (Acheteur, Bénéficiaire, Type, Code, Expiration)
-    doc.fillColor('#0f172a'); // Bleu très foncé pour le texte
-    doc.font('Helvetica-Bold');
-
-    // Section 1 : De la part de
+    doc.fillColor('#0f172a').font('Helvetica-Bold');
     doc.fontSize(10).fillColor('#64748b').text('OFFERT PAR', 60, 380, { characterSpacing: 2 });
-    doc.fontSize(22).fillColor('#1e40af').text(voucher.buyer_name.toUpperCase(), 60, 395);
+    doc.fontSize(22).fillColor('#1e40af').text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 60, 395);
 
-    // Section 2 : Valable pour
     doc.fontSize(10).fillColor('#64748b').text('VALABLE POUR', 60, 490, { characterSpacing: 2 });
     if (voucher.flight_name) {
       doc.fontSize(28).fillColor('#1e40af').text(voucher.flight_name.toUpperCase(), 60, 505);
     } else {
-      const montant = voucher.price_paid_cents / 100;
-      doc.fontSize(28).fillColor('#1e40af').text(`UN AVOIR LIBRE DE ${montant}€`, 60, 505);
+      doc.fontSize(28).fillColor('#1e40af').text(`UN AVOIR LIBRE DE ${voucher.price_paid_cents / 100}€`, 60, 505);
     }
 
-    // Section 3 : Le code unique
     doc.fontSize(10).fillColor('#64748b').text("CODE D'ACTIVATION UNIQUE", 60, 580, { characterSpacing: 2 });
     doc.fontSize(42).fillColor('#f026b8').text(voucher.code, 60, 595, { characterSpacing: 4 });
 
-    // Section 4 : Date d'expiration
     const expiryDate = new Date(voucher.valid_until);
-    const formattedDate = expiryDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    const formattedDate = isNaN(expiryDate.getTime()) ? '18 MOIS' : expiryDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 
     doc.fontSize(10).fillColor('#64748b').text("DATE D'EXPIRATION", 60, 680, { characterSpacing: 2 });
     doc.fontSize(20).fillColor('#1e40af').text(formattedDate.toUpperCase(), 60, 695);
 
-    // Finaliser le document
     doc.end();
-
   } catch (err) {
     console.error("Erreur génération PDF:", err);
-    if (!res.headersSent) {
-      res.status(500).send("Erreur lors de la génération du bon cadeau.");
-    }
+    if (!res.headersSent) res.status(500).send("Erreur lors de la génération du bon cadeau.");
   }
 });
 
-// 🗑️ 1. SUPPRIMER UN VOL UNIQUE (Nettoyage intégral)
 app.delete('/api/slots/:id', authenticateUser, async (req, res) => {
   try {
+    // 🎯 NOUVEAU : On récupère le code cadeau avant de vider le créneau
+    const slotRes = await pool.query('SELECT payment_status FROM slots WHERE id = $1', [req.params.id]);
+    if (slotRes.rows.length > 0 && slotRes.rows[0].payment_status) {
+      const match = slotRes.rows[0].payment_status.match(/(?:Code|Promo|Cadeau)\s*:\s*([a-zA-Z0-9_-]+)/i);
+      if (match) {
+        const code = match[1].toUpperCase();
+        // On supprime le code de la base, SEULEMENT si c'est un vrai Bon Cadeau (pas une Promo)
+        await pool.query(`DELETE FROM gift_cards WHERE UPPER(code) = $1 AND type = 'gift_card'`, [code]);
+      }
+    }
+
+    // Le nettoyage habituel du créneau
     await pool.query(
-      `UPDATE slots 
-       SET status = 'available', 
-           payment_status = NULL, 
-           title = NULL, 
-           notes = NULL,
-           phone = NULL,
-           email = NULL,
-           booking_options = NULL,   -- 🎯 On vide l'option Photo/Vidéo
-           client_message = NULL,    -- 🎯 On vide les notes du client
-           flight_type_id = NULL,
-           weight_checked = false,
-           weight = NULL             -- 🎯 On vide aussi le poids si présent
-       WHERE id = $1`,
-      [req.params.id]
+      `UPDATE slots SET status = 'available', payment_status = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL WHERE id = $1`, [req.params.id]
     );
     res.json({ success: true });
-  } catch (err) {
-    console.error("❌ ERREUR DELETE SLOT:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 🧹 2. SUPPRESSION MASSIVE (Nettoyage intégral)
 app.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
   const { ids } = req.body;
   if (!ids || ids.length === 0) return res.status(400).json({ error: "Aucun ID" });
-
+  
   try {
-    await pool.query(
-      `UPDATE slots 
-       SET status = 'available', 
-           payment_status = NULL, 
-           title = NULL,
-           phone = NULL,
-           email = NULL,
-           notes = NULL,
-           booking_options = NULL,   -- 🎯 Nettoyage ici aussi
-           client_message = NULL,    -- 🎯 Nettoyage ici aussi
-           flight_type_id = NULL,
-           weight = NULL
-       WHERE id = ANY($1::int[])`, 
-      [ids]
-    );
+    // 🎯 NOUVEAU : On récupère tous les codes cadeaux des créneaux sélectionnés
+    const slotsRes = await pool.query('SELECT payment_status FROM slots WHERE id = ANY($1::int[])', [ids]);
+    const codesToDelete = [];
+    
+    for (const row of slotsRes.rows) {
+      if (row.payment_status) {
+        const match = row.payment_status.match(/(?:Code|Promo|Cadeau)\s*:\s*([a-zA-Z0-9_-]+)/i);
+        if (match) codesToDelete.push(match[1].toUpperCase());
+      }
+    }
+
+    // Si on a trouvé des codes, on les supprime tous en un seul coup
+    if (codesToDelete.length > 0) {
+      await pool.query(`DELETE FROM gift_cards WHERE UPPER(code) = ANY($1::text[]) AND type = 'gift_card'`, [codesToDelete]);
+    }
+
+    // Le nettoyage habituel des créneaux
+    await pool.query(`UPDATE slots SET status = 'available', payment_status = NULL, title = NULL, phone = NULL, email = NULL, notes = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight = NULL WHERE id = ANY($1::int[])`, [ids]);
     res.json({ success: true });
-  } catch (err) {
-    console.error("❌ ERREUR BULK DELETE:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- DÉMARRAGE ---
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
