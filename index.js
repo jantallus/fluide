@@ -74,9 +74,8 @@ async function generatePDFBuffer(voucher) {
     doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
     doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
     
-    doc.fillColor('#1e40af').font('Helvetica-Bold');
-    doc.fontSize(22).text(voucher.beneficiary_name.toUpperCase(), 60, 355);
-    doc.fontSize(22).text(voucher.buyer_name.toUpperCase(), 60, 425);
+    doc.fillColor('#64748b').fontSize(14).font('Helvetica-Bold').text('OFFERT PAR :', 60, 355);
+    doc.fillColor('#1e40af').fontSize(24).text(voucher.buyer_name.toUpperCase(), 60, 380);
     
     const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
     doc.fontSize(28).text(giftName.toUpperCase(), 60, 505);
@@ -624,24 +623,23 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     // ------------------------------------
 
     // Si toutes les sécurités sont passées, on applique la modification
-    const result = await pool.query(
+        const result = await pool.query(
       `UPDATE slots 
-       SET title = $1, 
-           weight = $2, 
-           flight_type_id = $3, 
-           notes = $4, 
-           status = $5,
-           monitor_id = COALESCE($6, monitor_id),
-           phone = $8,
-           email = $9,
-           weight_checked = $10,
-           booking_options = $11,
-           client_message = $12,
-           -- 🎯 LA CORRECTION EST ICI :
-           -- On garde le payment_status actuel s'il n'est pas fourni dans la requête
-           payment_status = COALESCE($13, payment_status)
-       WHERE id = $7
-       RETURNING *`, 
+      SET title = $1, 
+          weight = $2, 
+          flight_type_id = $3, 
+          notes = $4, 
+          status = $5,
+          monitor_id = COALESCE($6, monitor_id),
+          phone = $8,
+          email = $9,
+          weight_checked = $10,
+          booking_options = $11,
+          client_message = $12,
+          -- 🎯 SÉCURITÉ : Garde l'ancien statut de paiement si $13 est NULL
+          payment_status = COALESCE($13, payment_status)
+      WHERE id = $7
+      RETURNING *`, 
       [
         title !== undefined ? title : null, 
         weight ? parseInt(weight) : null, 
@@ -655,7 +653,8 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
         weightChecked !== undefined ? weightChecked : false,
         booking_options !== undefined ? booking_options : null,
         client_message !== undefined ? client_message : null,
-        req.body.payment_status !== undefined ? req.body.payment_status : null // $13
+        // 🎯 On passe la valeur du front-end ici
+        req.body.payment_status !== undefined ? req.body.payment_status : null
       ]
     );
 
@@ -1120,6 +1119,19 @@ app.put('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
   }
 });
 
+// CHANGER LE STATUT D'UN BON OU D'UNE PROMO (Activer/Désactiver)
+app.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE gift_cards SET status = $1 WHERE id = $2`,
+      [req.body.status, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
 // SUPPRIMER UN CODE OU UN BON
 app.delete('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
   try {
@@ -1275,7 +1287,7 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
           currency: 'eur',
           product_data: {
             name: template.title,
-            description: `De la part de : ${buyer.name} | Pour : ${buyer.beneficiaryName}`
+            description: `Bon cadeau offert par : ${buyer.name}` // 👈 Modifié
           },
           unit_amount: template.price_cents
         },
@@ -1285,10 +1297,10 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
       metadata: {
-        purchase_type: 'gift_card', // 👈 Le mot de passe pour dire au serveur "C'est un bon !"
+        purchase_type: 'gift_card',
         buyer_name: buyer.name,
         buyer_email: buyer.email,
-        beneficiary_name: buyer.beneficiaryName,
+        beneficiary_name: '', // 👈 Vide pour ne pas faire planter la BDD
         price_paid_cents: template.price_cents,
         validity_months: template.validity_months,
         flight_type_id: template.flight_type_id || '',
@@ -1688,12 +1700,9 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     doc.fillColor('#0f172a'); // Bleu très foncé pour le texte
     doc.font('Helvetica-Bold');
 
-    // Section 1 : Pour qui / De la part de
-    doc.fontSize(10).fillColor('#64748b').text('BÉNÉFICIAIRE', 60, 340, { characterSpacing: 2 });
-    doc.fontSize(22).fillColor('#1e40af').text(voucher.beneficiary_name.toUpperCase(), 60, 355);
-
-    doc.fontSize(10).fillColor('#64748b').text('ACHETEUR', 60, 410, { characterSpacing: 2 });
-    doc.fontSize(22).fillColor('#1e40af').text(voucher.buyer_name.toUpperCase(), 60, 425);
+    // Section 1 : De la part de
+    doc.fontSize(10).fillColor('#64748b').text('OFFERT PAR', 60, 380, { characterSpacing: 2 });
+    doc.fontSize(22).fillColor('#1e40af').text(voucher.buyer_name.toUpperCase(), 60, 395);
 
     // Section 2 : Valable pour
     doc.fontSize(10).fillColor('#64748b').text('VALABLE POUR', 60, 490, { characterSpacing: 2 });
