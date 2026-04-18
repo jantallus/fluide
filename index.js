@@ -560,12 +560,25 @@ app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
 
 app.get('/api/slots', authenticateUser, async (req, res) => {
   try {
-    let query = 'SELECT * FROM slots ORDER BY start_time ASC';
+    const { start, end } = req.query; // 🎯 NOUVEAU: Récupère la fenêtre de dates demandée par le calendrier
+    
+    let query = 'SELECT * FROM slots WHERE 1=1';
     let params = [];
+
     if (req.user.role === 'monitor') {
-      query = 'SELECT * FROM slots WHERE monitor_id = $1 ORDER BY start_time ASC';
-      params = [req.user.id];
+      params.push(req.user.id);
+      query += ` AND monitor_id = $${params.length}`;
     }
+
+    if (start && end) {
+      params.push(start, end);
+      query += ` AND start_time >= $${params.length - 1} AND start_time <= $${params.length}`;
+    } else {
+      // 🚀 TURBO PAR DÉFAUT : Si pas de dates précisées, on ne charge que de J-30 à J+180
+      query += ` AND start_time >= NOW() - INTERVAL '1 month' AND start_time <= NOW() + INTERVAL '6 months'`;
+    }
+
+    query += ' ORDER BY start_time ASC';
     const r = await pool.query(query, params);
     res.json(r.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
