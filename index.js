@@ -1453,5 +1453,86 @@ app.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ==========================================
+// 📅 GÉNÉRATEUR DE FLUX ICAL (CALENDRIER PILOTES)
+// ==========================================
+app.get('/api/ical/:id', async (req, res) => {
+  try {
+    const monitorId = req.params.id;
+    
+    // 1. On vérifie qui est ce moniteur
+    const userRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [monitorId]);
+    if (userRes.rows.length === 0) return res.status(404).send("Moniteur introuvable");
+    const monitorName = userRes.rows[0].first_name;
+
+    // 2. On récupère tous ses créneaux bloqués, notes, et vols (passés et futurs)
+    const slotsRes = await pool.query(`
+      SELECT s.*, ft.name as flight_name 
+      FROM slots s 
+      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
+      WHERE s.monitor_id = $1 
+        AND s.status = 'booked' 
+        AND s.title NOT LIKE '↪️ Suite%' 
+        AND s.start_time >= NOW() - INTERVAL '30 days'
+      ORDER BY s.start_time ASC
+    `, [monitorId]);
+
+    // 3. On construit l'entête du calendrier
+    let ical = "BEGIN:VCALENDAR\r\n";
+    ical += "VERSION:2.0\r\n";
+    ical += `PRODID:-//Fluide Parapente//${monitorName}//FR\r\n`;
+    ical += "CALSCALE:GREGORIAN\r\n";
+    ical += `X-WR-CALNAME:Planning Fluide - ${monitorName}\r\n`; // Le nom qui s'affichera dans Google Calendar
+    ical += "X-WR-TIMEZONE:Europe/Paris\r\n";
+
+    // Outil pour formater les dates au format iCal (YYYYMMDDTHHmmssZ)
+    const formatDate = (date) => {
+      return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+
+    // 4. On crée un "événement" pour chaque vol
+    slotsRes.rows.forEach(slot => {
+      const start = new Date(slot.start_time);
+      const end = new Date(slot.end_time);
+      const title = slot.title || "Réservation";
+      const flightName = slot.flight_name || "";
+      
+      // Le Titre de l'événement dans l'agenda
+      let summary = title;
+      if (flightName) summary += ` (${flightName})`;
+      if (title === 'NOTE' || title.includes('NON DISPO') || title.includes('PAUSE')) {
+        summary = `[${title}]`;
+      }
+
+      // La Description de l'événement (avec les infos pratiques)
+      let description = "";
+      if (slot.phone) description += `Tel: ${slot.phone}\\n`;
+      if (slot.booking_options) description += `Options: ${slot.booking_options}\\n`;
+      if (slot.notes) description += `Notes: ${slot.notes}\\n`;
+      if (slot.client_message) description += `Message client: ${slot.client_message}\\n`;
+
+      ical += "BEGIN:VEVENT\r\n";
+      ical += `UID:slot-${slot.id}@fluide-parapente.fr\r\n`;
+      ical += `DTSTAMP:${formatDate(new Date())}\r\n`;
+      ical += `DTSTART:${formatDate(start)}\r\n`;
+      ical += `DTEND:${formatDate(end)}\r\n`;
+      ical += `SUMMARY:${summary}\r\n`;
+      if (description) ical += `DESCRIPTION:${description}\r\n`;
+      ical += "END:VEVENT\r\n";
+    });
+
+    ical += "END:VCALENDAR\r\n";
+
+    // 5. On envoie le fichier au navigateur/téléphone
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="planning_fluide_${monitorName}.ics"`);
+    res.send(ical);
+
+  } catch (err) {
+    console.error("Erreur génération iCal:", err);
+    res.status(500).send("Erreur lors de la génération du calendrier");
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => { console.log(`✅ Backend Fluide V3 prêt sur le port ${PORT}`); });
