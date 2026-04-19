@@ -292,6 +292,25 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
     console.log(`🛎️ Notification Admin envoyée à :`, adminEmailsStr);
   } catch (err) { console.error("❌ Erreur envoi notification admin :", err); }
 }
+
+// 🎯 NOUVEAU : FONCTION POUR ENVOYER LE VOL À GOOGLE SCRIPT
+async function notifyGoogleCalendar(monitorName, title, startTime, endTime, description) {
+  // ⚠️ COLLEZ ICI L'URL DU WEBHOOK GOOGLE OBTENUE À L'ÉTAPE 2
+  const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
+  
+  if (!webhookUrl || webhookUrl === "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec") return;
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      body: JSON.stringify({ monitorName, title, startTime, endTime, description })
+    });
+    console.log(`✅ Vol envoyé instantanément à l'agenda de ${monitorName} !`);
+  } catch (err) {
+    console.error("❌ Erreur de synchro avec Google Script :", err);
+  }
+}
+
 // --- VRAIE SÉCURITÉ BACKEND 🔒 ---
 const authenticateUser = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -1125,6 +1144,23 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
         WHERE id = $2
       `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]);
       
+// 🎯 NOUVEAU : ON PRÉVIENT GOOGLE INSTANTANÉMENT
+      try {
+        const monRes = await client.query('SELECT first_name FROM users WHERE id = $1', [chosenMonitor]);
+        if (monRes.rows.length > 0) {
+          const monitorName = monRes.rows[0].first_name;
+          let desc = "";
+          if (contact.phone) desc += `Tel: ${contact.phone}\n`;
+          if (bookingOptions) desc += `Options: ${bookingOptions}\n`;
+          if (clientMessage) desc += `Message client: ${clientMessage}\n`;
+
+          // On n'envoie pas les "Suites" pour ne pas créer de doublons
+          if (isFirstSlot) {
+            await notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
+          }
+        }
+      } catch(e) { console.error("Erreur Synchro Google:", e); }
+
       const index = availableSlots.findIndex(s => s.id === slot.id);
       if(index > -1) availableSlots.splice(index, 1);
       isFirstSlot = false;
