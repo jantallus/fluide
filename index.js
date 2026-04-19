@@ -1460,51 +1460,57 @@ app.get('/api/ical/:id', async (req, res) => {
   try {
     const monitorId = req.params.id;
     
-    // 1. On vérifie qui est ce moniteur
     const userRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [monitorId]);
     if (userRes.rows.length === 0) return res.status(404).send("Moniteur introuvable");
     const monitorName = userRes.rows[0].first_name;
 
-    // 2. On récupère tous ses créneaux bloqués, notes, et vols (passés et futurs)
+    // FILTRE 1 : SQL (On enlève le maximum ici)
     const slotsRes = await pool.query(`
       SELECT s.*, ft.name as flight_name 
       FROM slots s 
       LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
       WHERE s.monitor_id = $1 
         AND s.status = 'booked' 
+        AND s.title IS NOT NULL
         AND s.title NOT LIKE '↪️ Suite%' 
+        AND s.title != 'NOTE'
         AND s.start_time >= NOW() - INTERVAL '30 days'
       ORDER BY s.start_time ASC
     `, [monitorId]);
 
-    // 3. On construit l'entête du calendrier
     let ical = "BEGIN:VCALENDAR\r\n";
     ical += "VERSION:2.0\r\n";
     ical += `PRODID:-//Fluide Parapente//${monitorName}//FR\r\n`;
     ical += "CALSCALE:GREGORIAN\r\n";
-    ical += `X-WR-CALNAME:Planning Fluide - ${monitorName}\r\n`; // Le nom qui s'affichera dans Google Calendar
+    ical += `X-WR-CALNAME:Planning Fluide - ${monitorName}\r\n`; 
     ical += "X-WR-TIMEZONE:Europe/Paris\r\n";
 
-    // Outil pour formater les dates au format iCal (YYYYMMDDTHHmmssZ)
     const formatDate = (date) => {
       return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     };
 
-    // 4. On crée un "événement" pour chaque vol
     slotsRes.rows.forEach(slot => {
-      const start = new Date(slot.start_time);
-      const end = new Date(slot.end_time);
-      const title = slot.title || "Réservation";
-      const flightName = slot.flight_name || "";
+      const title = slot.title || "";
+      const upperTitle = title.toUpperCase();
       
-      // Le Titre de l'événement dans l'agenda
-      let summary = title;
-      if (flightName) summary += ` (${flightName})`;
-      if (title === 'NOTE' || title.includes('NON DISPO') || title.includes('PAUSE')) {
-        summary = `[${title}]`;
+      // FILTRE 2 : JAVASCRIPT (Barrage absolu anti-pauses et blocages)
+      if (
+        upperTitle.includes('PAUSE') || 
+        upperTitle.includes('NON DISPO') || 
+        title.includes('☕') || 
+        title.includes('❌') ||
+        upperTitle === 'NOTE'
+      ) {
+        return; // On l'éjecte du calendrier !
       }
 
-      // La Description de l'événement (avec les infos pratiques)
+      const start = new Date(slot.start_time);
+      const end = new Date(slot.end_time);
+      const flightName = slot.flight_name || "";
+      
+      let summary = title;
+      if (flightName) summary += ` (${flightName})`;
+
       let description = "";
       if (slot.phone) description += `Tel: ${slot.phone}\\n`;
       if (slot.booking_options) description += `Options: ${slot.booking_options}\\n`;
@@ -1523,7 +1529,6 @@ app.get('/api/ical/:id', async (req, res) => {
 
     ical += "END:VCALENDAR\r\n";
 
-    // 5. On envoie le fichier au navigateur/téléphone
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="planning_fluide_${monitorName}.ics"`);
     res.send(ical);
