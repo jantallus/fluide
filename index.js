@@ -584,8 +584,7 @@ app.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
 
 app.get('/api/slots', authenticateUser, async (req, res) => {
   try {
-    const { start, end } = req.query; // 🎯 NOUVEAU: Récupère la fenêtre de dates demandée par le calendrier
-    
+    const { start, end } = req.query;
     let query = 'SELECT * FROM slots WHERE 1=1';
     let params = [];
 
@@ -598,13 +597,43 @@ app.get('/api/slots', authenticateUser, async (req, res) => {
       params.push(start, end);
       query += ` AND start_time >= $${params.length - 1} AND start_time <= $${params.length}`;
     } else {
-      // 🚀 TURBO PAR DÉFAUT : Si pas de dates précisées, on ne charge que de J-30 à J+180
       query += ` AND start_time >= NOW() - INTERVAL '1 month' AND start_time <= NOW() + INTERVAL '6 months'`;
     }
 
     query += ' ORDER BY start_time ASC';
     const r = await pool.query(query, params);
-    res.json(r.rows);
+    let slots = r.rows;
+
+    // 🎯 SYNC GOOGLE : On va demander à Google ses blocages en temps réel
+    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; // Mettez votre URL ici
+    
+    // On récupère la liste des moniteurs uniques dans les slots
+    const monitorIds = [...new Set(slots.map(s => s.monitor_id))];
+    
+    for (const mId of monitorIds) {
+      const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
+      if (monRes.rows.length > 0) {
+        const mName = monRes.rows[0].first_name;
+        try {
+          // On appelle le "doGet" de Google
+          const resp = await fetch(`${webhookUrl}?monitorName=${mName}`);
+          const googleBusySlots = await resp.json();
+
+          // On marque comme "NON DISPO" les slots qui tombent pendant un événement Google
+          slots = slots.map(slot => {
+            const slotStart = new Date(slot.start_time).getTime();
+            const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+            
+            if (isBusy && slot.status === 'available') {
+              return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
+            }
+            return slot;
+          });
+        } catch (e) { console.error(`Erreur sync Google pour ${mName}`); }
+      }
+    }
+
+    res.json(slots);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1019,12 +1048,52 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
     res.json({ summary: { totalRevenue: parseInt(summaryResult.rows[0].total_revenue), totalBookings: parseInt(summaryResult.rows[0].total_bookings) }, upcoming: upcomingResult.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
 app.get('/api/public/availabilities', async (req, res) => {
   const { date } = req.query; 
   try {
     if (!date) return res.status(400).json({ error: "Date requise" });
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
-    res.json(r.rows);
+    let slots = r.rows;
+
+    // 🎯 SYNC GOOGLE : Vérification des blocages personnels en temps réel
+    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
+    
+    // On liste les ID des pilotes présents sur cette journée (pour ne pas interroger ceux qui ne travaillent pas)
+    const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
+
+    // On utilise Promise.all pour interroger tous les agendas Google en même temps (plus rapide !)
+    await Promise.all(monitorIds.map(async (mId) => {
+      try {
+        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
+        if (monRes.rows.length > 0) {
+          const mName = monRes.rows[0].first_name;
+          
+          // On appelle le "doGet" de Google
+          const resp = await fetch(`${webhookUrl}?monitorName=${mName}`);
+          const googleBusySlots = await resp.json();
+
+          // Si un créneau "available" tombe pendant un blocage Google, on le marque en "booked"
+          slots = slots.map(slot => {
+            if (slot.monitor_id === mId && slot.status === 'available') {
+              const slotStart = new Date(slot.start_time).getTime();
+              const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+              
+              if (isBusy) {
+                // Pour le client (côté public), on renvoie juste que le créneau est "booked" (réservé), 
+                // le site fera disparaître la case automatiquement !
+                return { ...slot, status: 'booked' }; 
+              }
+            }
+            return slot;
+          });
+        }
+      } catch (e) {
+        console.error(`Erreur sync Google public pour le moniteur ${mId}:`, e);
+      }
+    }));
+
+    res.json(slots);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
