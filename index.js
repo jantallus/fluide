@@ -89,6 +89,34 @@ async function drawBackground(doc, urlOrPath) {
   }
 }
 
+// ==========================================
+// 🧠 SYSTÈME DE CACHE GOOGLE (Anti-Lenteur)
+// ==========================================
+const googleSyncCache = new Map();
+const CACHE_DURATION_MS = 5 * 60 * 1000; // Mémorise pendant 5 minutes
+
+async function getGoogleBusySlots(monitorName, webhookUrl) {
+  const now = Date.now();
+  const cached = googleSyncCache.get(monitorName);
+  
+  // Si on a l'info en mémoire et qu'elle a moins de 5 min, on la donne instantanément !
+  if (cached && (now - cached.timestamp < CACHE_DURATION_MS)) {
+    return cached.slots;
+  }
+
+  // Sinon, on va interroger Google
+  try {
+    const resp = await fetch(`${webhookUrl}?monitorName=${monitorName}`);
+    const slots = await resp.json();
+    // On met en mémoire pour les prochains clients
+    googleSyncCache.set(monitorName, { timestamp: now, slots: slots });
+    return slots;
+  } catch(e) {
+    console.error(`Erreur sync Google pour ${monitorName}:`, e);
+    return [];
+  }
+}
+
 async function generatePDFBuffer(voucher) {
   return new Promise(async (resolve, reject) => { 
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
@@ -604,38 +632,39 @@ app.get('/api/slots', authenticateUser, async (req, res) => {
     const r = await pool.query(query, params);
     let slots = r.rows;
 
-    // 🎯 SYNC GOOGLE : On va demander à Google ses blocages en temps réel
-    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; // Mettez votre URL ici
+    // 🎯 SYNC GOOGLE : Version ultra-rapide avec Cache et Requêtes simultanées
+    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
     
-    // On récupère la liste des moniteurs uniques dans les slots
-    const monitorIds = [...new Set(slots.map(s => s.monitor_id))];
+    const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
     
-    for (const mId of monitorIds) {
-      const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
-      if (monRes.rows.length > 0) {
-        const mName = monRes.rows[0].first_name;
-        try {
-          // On appelle le "doGet" de Google
-          const resp = await fetch(`${webhookUrl}?monitorName=${mName}`);
-          const googleBusySlots = await resp.json();
+    // Promise.all permet d'interroger tous les pilotes en même temps plutôt qu'un par un
+    await Promise.all(monitorIds.map(async (mId) => {
+      try {
+        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
+        if (monRes.rows.length > 0) {
+          const mName = monRes.rows[0].first_name;
+          
+          // On utilise notre nouvelle mémoire ultra-rapide
+          const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
 
-          // On marque comme "NON DISPO" les slots qui tombent pendant un événement Google
           slots = slots.map(slot => {
             const slotStart = new Date(slot.start_time).getTime();
             const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
             
-            // 🎯 LA CORRECTION EST ICI : On vérifie que le créneau appartient bien au pilote (slot.monitor_id === mId)
             if (slot.monitor_id === mId && isBusy && slot.status === 'available') {
               return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
             }
             return slot;
           });
-        } catch (e) { console.error(`Erreur sync Google pour ${mName}`); }
-      }
-    }
+        }
+      } catch (e) { console.error(`Erreur sync Google pour ${mId}`); }
+    }));
 
+    // 🎯 C'EST ICI QUE ÇA COINÇAIT : Il manquait la fin de la fonction !
     res.json(slots);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
@@ -1057,32 +1086,26 @@ app.get('/api/public/availabilities', async (req, res) => {
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
     let slots = r.rows;
 
-    // 🎯 SYNC GOOGLE : Vérification des blocages personnels en temps réel
+    // 🎯 SYNC GOOGLE : Version publique ultra-rapide avec Cache
     const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
     
-    // On liste les ID des pilotes présents sur cette journée (pour ne pas interroger ceux qui ne travaillent pas)
     const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
 
-    // On utilise Promise.all pour interroger tous les agendas Google en même temps (plus rapide !)
     await Promise.all(monitorIds.map(async (mId) => {
       try {
         const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
         if (monRes.rows.length > 0) {
           const mName = monRes.rows[0].first_name;
           
-          // On appelle le "doGet" de Google
-          const resp = await fetch(`${webhookUrl}?monitorName=${mName}`);
-          const googleBusySlots = await resp.json();
+          // On utilise notre mémoire ultra-rapide
+          const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
 
-          // Si un créneau "available" tombe pendant un blocage Google, on le marque en "booked"
           slots = slots.map(slot => {
             if (slot.monitor_id === mId && slot.status === 'available') {
               const slotStart = new Date(slot.start_time).getTime();
               const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
               
               if (isBusy) {
-                // Pour le client (côté public), on renvoie juste que le créneau est "booked" (réservé), 
-                // le site fera disparaître la case automatiquement !
                 return { ...slot, status: 'booked' }; 
               }
             }
@@ -1094,8 +1117,11 @@ app.get('/api/public/availabilities', async (req, res) => {
       }
     }));
 
+    // La fameuse ligne de fin pour répondre au site !
     res.json(slots);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
