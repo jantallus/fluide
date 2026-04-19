@@ -293,19 +293,24 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
   } catch (err) { console.error("❌ Erreur envoi notification admin :", err); }
 }
 
-// 🎯 NOUVEAU : FONCTION POUR ENVOYER LE VOL À GOOGLE SCRIPT
+// 🎯 FONCTION POUR ENVOYER LE VOL À GOOGLE SCRIPT
 async function notifyGoogleCalendar(monitorName, title, startTime, endTime, description) {
-  // ⚠️ COLLEZ ICI L'URL DU WEBHOOK GOOGLE OBTENUE À L'ÉTAPE 2
   const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
   
-  if (!webhookUrl || webhookUrl === "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec") return;
-
   try {
-    await fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: 'POST',
-      body: JSON.stringify({ monitorName, title, startTime, endTime, description })
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ monitorName, title, startTime, endTime, description }),
+      redirect: 'follow'
     });
-    console.log(`✅ Vol envoyé instantanément à l'agenda de ${monitorName} !`);
+    
+    // On lit la réponse de Google et on l'affiche dans Railway
+    const responseText = await response.text();
+    console.log(`📡 Réponse de Google pour ${monitorName} :`, responseText);
+    
   } catch (err) {
     console.error("❌ Erreur de synchro avec Google Script :", err);
   }
