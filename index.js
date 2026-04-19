@@ -624,7 +624,8 @@ app.get('/api/slots', authenticateUser, async (req, res) => {
             const slotStart = new Date(slot.start_time).getTime();
             const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
             
-            if (isBusy && slot.status === 'available') {
+            // 🎯 LA CORRECTION EST ICI : On vérifie que le créneau appartient bien au pilote (slot.monitor_id === mId)
+            if (slot.monitor_id === mId && isBusy && slot.status === 'available') {
               return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
             }
             return slot;
