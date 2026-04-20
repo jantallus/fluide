@@ -1112,20 +1112,26 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
 });
 
 app.get('/api/public/availabilities', async (req, res) => {
-  const { date } = req.query; 
+  const { date, start, end } = req.query; 
   try {
-    if (!date) return res.status(400).json({ error: "Date requise" });
-    const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
-    let slots = r.rows;
+    let slots = [];
+    
+    // 🎯 NOUVEAU : On gère les requêtes par période (ultra-rapide)
+    if (start && end) {
+      const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
+      slots = r.rows;
+    } else if (date) {
+      const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
+      slots = r.rows;
+    } else {
+      return res.status(400).json({ error: "Date ou Période requise" });
+    }
 
-    // 🎯 L'OUBLI ÉTAIT ICI : On interroge la base de données pour savoir si le bouton est sur ON ou OFF
     const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
     const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
 
     if (isGoogleSyncEnabled) {
-      // 🎯 SYNC GOOGLE : Version publique ultra-rapide avec Cache
       const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
-      
       const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
 
       await Promise.all(monitorIds.map(async (mId) => {
@@ -1133,7 +1139,6 @@ app.get('/api/public/availabilities', async (req, res) => {
           const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
           if (monRes.rows.length > 0) {
             const mName = monRes.rows[0].first_name;
-            
             const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
 
             slots = slots.map(slot => {
