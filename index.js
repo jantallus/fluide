@@ -746,7 +746,7 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     }
 
     res.json(updatedSlot);
-    
+
   } catch (err) {
     console.error("ERREUR PATCH SLOT:", err);
     res.status(500).json({ error: err.message });
@@ -1118,40 +1118,42 @@ app.get('/api/public/availabilities', async (req, res) => {
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
     let slots = r.rows;
 
+    // 🎯 L'OUBLI ÉTAIT ICI : On interroge la base de données pour savoir si le bouton est sur ON ou OFF
+    const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+    const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
+
     if (isGoogleSyncEnabled) {
-    // 🎯 SYNC GOOGLE : Version publique ultra-rapide avec Cache
-    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
-    
-    const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
+      // 🎯 SYNC GOOGLE : Version publique ultra-rapide avec Cache
+      const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
+      
+      const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
 
-    await Promise.all(monitorIds.map(async (mId) => {
-      try {
-        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
-        if (monRes.rows.length > 0) {
-          const mName = monRes.rows[0].first_name;
-          
-          // On utilise notre mémoire ultra-rapide
-          const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
+      await Promise.all(monitorIds.map(async (mId) => {
+        try {
+          const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
+          if (monRes.rows.length > 0) {
+            const mName = monRes.rows[0].first_name;
+            
+            const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
 
-          slots = slots.map(slot => {
-            if (slot.monitor_id === mId && slot.status === 'available') {
-              const slotStart = new Date(slot.start_time).getTime();
-              const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
-              
-              if (isBusy) {
-                return { ...slot, status: 'booked' }; 
+            slots = slots.map(slot => {
+              if (slot.monitor_id === mId && slot.status === 'available') {
+                const slotStart = new Date(slot.start_time).getTime();
+                const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+                
+                if (isBusy) {
+                  return { ...slot, status: 'booked' }; 
+                }
               }
-            }
-            return slot;
-          });
+              return slot;
+            });
+          }
+        } catch (e) {
+          console.error(`Erreur sync Google public pour le moniteur ${mId}:`, e);
         }
-      } catch (e) {
-        console.error(`Erreur sync Google public pour le moniteur ${mId}:`, e);
-      }
-    }));
+      }));
     }
 
-    // La fameuse ligne de fin pour répondre au site !
     res.json(slots);
   } catch (err) { 
     res.status(500).json({ error: err.message }); 
