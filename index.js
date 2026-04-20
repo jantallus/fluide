@@ -90,32 +90,45 @@ async function drawBackground(doc, urlOrPath) {
 }
 
 // ==========================================
-// 🧠 SYSTÈME DE CACHE GOOGLE (Anti-Lenteur)
+// 🚀 L'ARME FATALE : SYNCHRONISATION EN TÂCHE DE FOND (0.01s)
 // ==========================================
 const googleSyncCache = new Map();
-const CACHE_DURATION_MS = 5 * 60 * 1000; // Mémorise pendant 5 minutes
+let isSyncing = false;
 
-async function getGoogleBusySlots(monitorName, webhookUrl) {
-  const now = Date.now();
-  const cached = googleSyncCache.get(monitorName);
-  
-  // Si on a l'info en mémoire et qu'elle a moins de 5 min, on la donne instantanément !
-  if (cached && (now - cached.timestamp < CACHE_DURATION_MS)) {
-    return cached.slots;
-  }
-
-  // Sinon, on va interroger Google
+async function runBackgroundGoogleSync() {
+  if (isSyncing) return; // Évite que les tâches se chevauchent
+  isSyncing = true;
   try {
-    const resp = await fetch(`${webhookUrl}?monitorName=${monitorName}`);
-    const slots = await resp.json();
-    // On met en mémoire pour les prochains clients
-    googleSyncCache.set(monitorName, { timestamp: now, slots: slots });
-    return slots;
+    const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+    if (syncSetting.rows.length === 0 || syncSetting.rows[0].value !== 'true') {
+      isSyncing = false;
+      return;
+    }
+
+    // On récupère uniquement les moniteurs actifs
+    const monRes = await pool.query("SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec";
+
+    // Le serveur va toquer chez Google silencieusement
+    for (const mon of monRes.rows) {
+      try {
+        const resp = await fetch(`${webhookUrl}?monitorName=${mon.first_name}`);
+        const slots = await resp.json();
+        // On sauvegarde directement avec l'ID du pilote (plus rapide pour filtrer plus tard)
+        googleSyncCache.set(mon.id, slots); 
+      } catch(e) { /* On ignore les petites erreurs Google */ }
+    }
   } catch(e) {
-    console.error(`Erreur sync Google pour ${monitorName}:`, e);
-    return [];
+    console.error("Erreur Background Sync:", e);
+  } finally {
+    isSyncing = false;
   }
 }
+
+// ⏱️ Le serveur refait le point toutes les 2 minutes (120 000 millisecondes)
+setInterval(runBackgroundGoogleSync, 120000);
+// 🚀 On lance un premier check 5 secondes après le démarrage du serveur
+setTimeout(runBackgroundGoogleSync, 5000);
 
 async function generatePDFBuffer(voucher) {
   return new Promise(async (resolve, reject) => { 
@@ -1111,58 +1124,34 @@ app.get('/api/stats', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ⚡ ROUTE PUBLIQUE VITESSE LUMIÈRE (100% SQL + Mémoire RAM)
 app.get('/api/public/availabilities', async (req, res) => {
-  const { date, start, end } = req.query; 
+  const { start, end } = req.query; 
   try {
-    let slots = [];
+    if (!start || !end) return res.status(400).json({ error: "Période requise" });
     
-    // 🎯 NOUVEAU : On gère les requêtes par période (ultra-rapide)
-    if (start && end) {
-      const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
-      slots = r.rows;
-    } else if (date) {
-      const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
-      slots = r.rows;
-    } else {
-      return res.status(400).json({ error: "Date ou Période requise" });
-    }
+    // 1. Un seul appel pour récupérer la grille de la base de données
+    const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
+    let slots = r.rows;
 
     const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
     const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
 
     if (isGoogleSyncEnabled) {
-      const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
-      const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
-
-      await Promise.all(monitorIds.map(async (mId) => {
-        try {
-          const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
-          if (monRes.rows.length > 0) {
-            const mName = monRes.rows[0].first_name;
-            const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
-
-            slots = slots.map(slot => {
-              if (slot.monitor_id === mId && slot.status === 'available') {
-                const slotStart = new Date(slot.start_time).getTime();
-                const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
-                
-                if (isBusy) {
-                  return { ...slot, status: 'booked' }; 
-                }
-              }
-              return slot;
-            });
-          }
-        } catch (e) {
-          console.error(`Erreur sync Google public pour le moniteur ${mId}:`, e);
+      // 2. On lit simplement la RAM du serveur (0.001 seconde d'attente)
+      slots = slots.map(slot => {
+        if (slot.status === 'available' && slot.monitor_id) {
+          const googleBusySlots = googleSyncCache.get(slot.monitor_id) || [];
+          const slotStart = new Date(slot.start_time).getTime();
+          const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+          if (isBusy) return { ...slot, status: 'booked' };
         }
-      }));
+        return slot;
+      });
     }
 
     res.json(slots);
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
