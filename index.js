@@ -714,7 +714,34 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: "Créneau introuvable" });
-    res.json(result.rows[0]);
+    
+    const updatedSlot = result.rows[0];
+
+    // 🎯 SYNC GOOGLE : Envoi des réservations manuelles depuis le backoffice
+    // On vérifie que c'est une vraie réservation client (Pas une Note, pas une Pause, et pas un créneau "Suite")
+    if (updatedSlot.status === 'booked' && updatedSlot.title && 
+        !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => updatedSlot.title.includes(t)) && 
+        !updatedSlot.title.includes('❌') && 
+        !updatedSlot.title.startsWith('↪️ Suite')) {
+      
+      try {
+        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [updatedSlot.monitor_id]);
+        if (monRes.rows.length > 0) {
+          const monitorName = monRes.rows[0].first_name;
+          
+          let desc = "Créé depuis le backoffice\n";
+          if (updatedSlot.phone) desc += `Tel: ${updatedSlot.phone}\n`;
+          if (updatedSlot.booking_options) desc += `Options: ${updatedSlot.booking_options}\n`;
+          if (updatedSlot.notes) desc += `Notes internes: ${updatedSlot.notes}\n`;
+          if (updatedSlot.client_message) desc += `Message client: ${updatedSlot.client_message}\n`;
+
+          // On "pousse" vers Google silencieusement (sans await) pour ne pas ralentir votre planning
+          notifyGoogleCalendar(monitorName, updatedSlot.title, updatedSlot.start_time, updatedSlot.end_time, desc);
+        }
+      } catch(e) { console.error("Erreur Synchro Google Admin:", e); }
+    }
+
+    res.json(updatedSlot);
   } catch (err) {
     console.error("ERREUR PATCH SLOT:", err);
     res.status(500).json({ error: err.message });
