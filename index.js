@@ -632,35 +632,35 @@ app.get('/api/slots', authenticateUser, async (req, res) => {
     const r = await pool.query(query, params);
     let slots = r.rows;
 
-    // 🎯 SYNC GOOGLE : Version ultra-rapide avec Cache et Requêtes simultanées
-    const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
-    
-    const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
-    
-    // Promise.all permet d'interroger tous les pilotes en même temps plutôt qu'un par un
-    await Promise.all(monitorIds.map(async (mId) => {
-      try {
-        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
-        if (monRes.rows.length > 0) {
-          const mName = monRes.rows[0].first_name;
-          
-          // On utilise notre nouvelle mémoire ultra-rapide
-          const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
+    // 🎯 VÉRIFICATION: Le partage Google est-il activé ?
+    const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+    const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
 
-          slots = slots.map(slot => {
-            const slotStart = new Date(slot.start_time).getTime();
-            const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
-            
-            if (slot.monitor_id === mId && isBusy && slot.status === 'available') {
-              return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
-            }
-            return slot;
-          });
-        }
-      } catch (e) { console.error(`Erreur sync Google pour ${mId}`); }
-    }));
+    if (isGoogleSyncEnabled) {
+      // 🎯 SYNC GOOGLE : Version ultra-rapide avec Cache
+      const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
+      const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
+      
+      await Promise.all(monitorIds.map(async (mId) => {
+        try {
+          const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [mId]);
+          if (monRes.rows.length > 0) {
+            const mName = monRes.rows[0].first_name;
+            const googleBusySlots = await getGoogleBusySlots(mName, webhookUrl);
 
-    // 🎯 C'EST ICI QUE ÇA COINÇAIT : Il manquait la fin de la fonction !
+            slots = slots.map(slot => {
+              const slotStart = new Date(slot.start_time).getTime();
+              const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+              if (slot.monitor_id === mId && isBusy && slot.status === 'available') {
+                return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
+              }
+              return slot;
+            });
+          }
+        } catch (e) { console.error(`Erreur sync Google pour ${mId}`); }
+      }));
+    }
+
     res.json(slots);
   } catch (err) { 
     res.status(500).json({ error: err.message }); 
@@ -718,30 +718,35 @@ app.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     const updatedSlot = result.rows[0];
 
     // 🎯 SYNC GOOGLE : Envoi des réservations manuelles depuis le backoffice
-    // On vérifie que c'est une vraie réservation client (Pas une Note, pas une Pause, et pas un créneau "Suite")
+    // On vérifie que c'est une vraie réservation client
     if (updatedSlot.status === 'booked' && updatedSlot.title && 
         !['NOTE', '☕ PAUSE', 'NON DISPO'].some(t => updatedSlot.title.includes(t)) && 
         !updatedSlot.title.includes('❌') && 
         !updatedSlot.title.startsWith('↪️ Suite')) {
       
       try {
-        const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [updatedSlot.monitor_id]);
-        if (monRes.rows.length > 0) {
-          const monitorName = monRes.rows[0].first_name;
+        // 🎯 L'INTERRUPTEUR EST ICI : On vérifie si la synchro est activée en base de données
+        const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+        if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
           
-          let desc = "Créé depuis le backoffice\n";
-          if (updatedSlot.phone) desc += `Tel: ${updatedSlot.phone}\n`;
-          if (updatedSlot.booking_options) desc += `Options: ${updatedSlot.booking_options}\n`;
-          if (updatedSlot.notes) desc += `Notes internes: ${updatedSlot.notes}\n`;
-          if (updatedSlot.client_message) desc += `Message client: ${updatedSlot.client_message}\n`;
+          const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [updatedSlot.monitor_id]);
+          if (monRes.rows.length > 0) {
+            const monitorName = monRes.rows[0].first_name;
+            
+            let desc = "Créé depuis le backoffice\n";
+            if (updatedSlot.phone) desc += `Tel: ${updatedSlot.phone}\n`;
+            if (updatedSlot.booking_options) desc += `Options: ${updatedSlot.booking_options}\n`;
+            if (updatedSlot.notes) desc += `Notes internes: ${updatedSlot.notes}\n`;
+            if (updatedSlot.client_message) desc += `Message client: ${updatedSlot.client_message}\n`;
 
-          // On "pousse" vers Google silencieusement (sans await) pour ne pas ralentir votre planning
-          notifyGoogleCalendar(monitorName, updatedSlot.title, updatedSlot.start_time, updatedSlot.end_time, desc);
+            notifyGoogleCalendar(monitorName, updatedSlot.title, updatedSlot.start_time, updatedSlot.end_time, desc);
+          }
         }
       } catch(e) { console.error("Erreur Synchro Google Admin:", e); }
     }
 
     res.json(updatedSlot);
+    
   } catch (err) {
     console.error("ERREUR PATCH SLOT:", err);
     res.status(500).json({ error: err.message });
@@ -1113,6 +1118,7 @@ app.get('/api/public/availabilities', async (req, res) => {
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date = $1 ORDER BY start_time ASC`, [date]);
     let slots = r.rows;
 
+    if (isGoogleSyncEnabled) {
     // 🎯 SYNC GOOGLE : Version publique ultra-rapide avec Cache
     const webhookUrl = "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec"; 
     
@@ -1143,6 +1149,7 @@ app.get('/api/public/availabilities', async (req, res) => {
         console.error(`Erreur sync Google public pour le moniteur ${mId}:`, e);
       }
     }));
+    }
 
     // La fameuse ligne de fin pour répondre au site !
     res.json(slots);
@@ -1272,19 +1279,21 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
         WHERE id = $2
       `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]);
       
-// 🎯 NOUVEAU : ON PRÉVIENT GOOGLE INSTANTANÉMENT
+// 🎯 NOUVEAU : ON PRÉVIENT GOOGLE INSTANTANÉMENT (SI ACTIVÉ)
       try {
-        const monRes = await client.query('SELECT first_name FROM users WHERE id = $1', [chosenMonitor]);
-        if (monRes.rows.length > 0) {
-          const monitorName = monRes.rows[0].first_name;
-          let desc = "";
-          if (contact.phone) desc += `Tel: ${contact.phone}\n`;
-          if (bookingOptions) desc += `Options: ${bookingOptions}\n`;
-          if (clientMessage) desc += `Message client: ${clientMessage}\n`;
+        const syncSetting = await client.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+        if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
+          const monRes = await client.query('SELECT first_name FROM users WHERE id = $1', [chosenMonitor]);
+          if (monRes.rows.length > 0) {
+            const monitorName = monRes.rows[0].first_name;
+            let desc = "";
+            if (contact.phone) desc += `Tel: ${contact.phone}\n`;
+            if (bookingOptions) desc += `Options: ${bookingOptions}\n`;
+            if (clientMessage) desc += `Message client: ${clientMessage}\n`;
 
-          // On n'envoie pas les "Suites" pour ne pas créer de doublons
-          if (isFirstSlot) {
-            await notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
+            if (isFirstSlot) {
+              await notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
+            }
           }
         }
       } catch(e) { console.error("Erreur Synchro Google:", e); }
