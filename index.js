@@ -59,6 +59,7 @@ pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS pdf_background_url V
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS is_partner BOOLEAN DEFAULT false;`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_amount_cents INTEGER;`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_billing_type VARCHAR(50) DEFAULT 'fixed';`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS buyer_address TEXT;`).catch(() => {});
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
@@ -1154,31 +1155,52 @@ app.get('/api/public/availabilities', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/public/site-settings', async (req, res) => {
+  try {
+    const r = await pool.query("SELECT key, value FROM site_settings WHERE key IN ('physical_gift_card_enabled', 'physical_gift_card_price')");
+    const settings = r.rows.reduce((acc, curr) => ({ ...acc, [curr.key]: curr.value }), {});
+    res.json(settings);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 app.post('/api/public/checkout-gift-card', async (req, res) => {
-  const { template, buyer } = req.body;
+  const { template, buyer, physicalShipping } = req.body;
   try {
+    // On va chercher le prix de l'envoi postal dans la base
+    const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
+    const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
+
+    const line_items = [{
+      price_data: {
+        currency: 'eur',
+        product_data: { name: template.title, description: `Bon cadeau offert par : ${buyer.name}` },
+        unit_amount: template.price_cents
+      },
+      quantity: 1
+    }];
+
+    // Si le client a coché l'option, on ajoute la ligne de facturation !
+    if (physicalShipping && physicalShipping.enabled && shipPriceCents > 0) {
+      line_items.push({
+        price_data: {
+          currency: 'eur',
+          product_data: { name: "📮 Envoi Postal", description: "Carte glacée imprimée envoyée par courrier" },
+          unit_amount: shipPriceCents
+        },
+        quantity: 1
+      });
+    }
+
     const sessionConfig = {
       payment_method_types: ['card'],
       customer_email: buyer.email,
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: {
-            name: template.title,
-            description: `Bon cadeau offert par : ${buyer.name}`
-          },
-          unit_amount: template.price_cents
-        },
-        quantity: 1
-      }],
+      line_items: line_items,
       mode: 'payment',
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
-      
-      // 🛡️ ULTRA-SÉCURITÉ : Tout est casté en String(x).substring(0, 499) pour éviter tout crash de Stripe
       metadata: {
         purchase_type: 'gift_card',
         buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
@@ -1188,7 +1210,9 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
         validity_months: String(template.validity_months || 12).substring(0, 499),
         flight_type_id: String(template.flight_type_id || '').substring(0, 499),
         image_url: String(template.image_url || '').substring(0, 499),
-        pdf_background_url: String(template.pdf_background_url || '').substring(0, 499)
+        pdf_background_url: String(template.pdf_background_url || '').substring(0, 499),
+        // 🎯 On sauvegarde l'adresse postale
+        buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : ''
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
@@ -1449,9 +1473,14 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       validUntil.setMonth(validUntil.getMonth() + monthsToAdd);
 
       // 🛡️ SÉCURITÉ ABSOLUE SUR LA BASE DE DONNÉES
+      let finalNotes = session.metadata.notes || '';
+      if (session.metadata.buyer_address) {
+         finalNotes = `📮 À POSTER : ${session.metadata.buyer_address}\n` + finalNotes;
+      }
+
       await client.query(
-        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url) 
-         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8)`,
+        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address) 
+         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9)`,
         [
           finalCode, 
           session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, 
@@ -1459,8 +1488,9 @@ app.post('/api/public/confirm-booking', async (req, res) => {
           session.metadata.buyer_phone || null, 
           parseInt(session.metadata.price_paid_cents) || 0, 
           validUntil, 
-          session.metadata.image_url || '',
-          session.metadata.pdf_background_url || null // 👈 Sauvegarde du fond PDF
+          finalNotes, // 👈 Les notes avec l'adresse
+          session.metadata.pdf_background_url || null,
+          session.metadata.buyer_address || null
         ]
       );
 
