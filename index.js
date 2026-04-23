@@ -61,6 +61,10 @@ pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_amount_cents
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_billing_type VARCHAR(50) DEFAULT 'fixed';`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS buyer_address TEXT;`).catch(() => {});
 
+// 🎯 NOUVEAU : On ajoute les cases pour la popup des vols
+pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS popup_content TEXT;`).catch(() => {});
+pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;`).catch(() => {});
+
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
 // ==========================================
@@ -556,7 +560,7 @@ app.get('/api/flight-types', async (req, res) => {
 });
 
 app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -564,16 +568,16 @@ app.post('/api/flight-types', authenticateAdmin, async (req, res) => {
   
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null]
+      `INSERT INTO flight_types (name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
-  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url } = req.body;
+  const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -582,9 +586,9 @@ app.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(
       `UPDATE flight_types 
-       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9, weight_min = $10, weight_max = $11, booking_delay_hours = $12, image_url = $13 
-       WHERE id = $14`,
-      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, req.params.id]
+       SET name = $1, duration_minutes = $2, price_cents = $3, restricted_start_time = $4, restricted_end_time = $5, color_code = $6, allowed_time_slots = $7, season = $8, allow_multi_slots = $9, weight_min = $10, weight_max = $11, booking_delay_hours = $12, image_url = $13, popup_content = $14, show_popup = $15 
+       WHERE id = $16`,
+      [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
