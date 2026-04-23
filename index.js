@@ -61,6 +61,10 @@ pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_amount_cents
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS partner_billing_type VARCHAR(50) DEFAULT 'fixed';`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS buyer_address TEXT;`).catch(() => {});
 
+// 🎯 NOUVEAU : On ajoute les cases pour la popup des bons cadeaux
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS popup_content TEXT;`).catch(() => {});
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;`).catch(() => {});
+
 // 🎯 NOUVEAU : On ajoute les cases pour la popup des vols
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS popup_content TEXT;`).catch(() => {});
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;`).catch(() => {});
@@ -969,22 +973,22 @@ app.get('/api/gift-card-templates', async (req, res) => {
 });
 
 app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url } = req.body;
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup } = req.body;
   try {
     const r = await pool.query(
-      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null]
+      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, popup_content || null, show_popup || false]
     );
     res.json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url } = req.body;
+  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup } = req.body;
   try {
     await pool.query(
-      `UPDATE gift_card_templates SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7, pdf_background_url = $8 WHERE id = $9`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, req.params.id]
+      `UPDATE gift_card_templates SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7, pdf_background_url = $8, popup_content = $9, show_popup = $10 WHERE id = $11`,
+      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, popup_content || null, show_popup || false, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
