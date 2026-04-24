@@ -1173,11 +1173,11 @@ app.get('/api/public/site-settings', async (req, res) => {
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
+/// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 app.post('/api/public/checkout-gift-card', async (req, res) => {
-  const { template, buyer, physicalShipping } = req.body;
+  // 🎯 NOUVEAU : On récupère selectedComplements (les options)
+  const { template, buyer, physicalShipping, selectedComplements } = req.body; 
   try {
-    // On va chercher le prix de l'envoi postal dans la base
     const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
     const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
 
@@ -1190,7 +1190,26 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
       quantity: 1
     }];
 
-    // Si le client a coché l'option, on ajoute la ligne de facturation !
+    // 🎯 NOUVEAU : On ajoute les options (photos/vidéos) à la facture Stripe
+    let optionsTotalCents = 0;
+    let optionsText = "";
+    if (selectedComplements && selectedComplements.length > 0) {
+      const names = [];
+      for (const comp of selectedComplements) {
+        optionsTotalCents += comp.price_cents;
+        names.push(comp.name);
+        line_items.push({
+          price_data: {
+            currency: 'eur',
+            product_data: { name: `Option incluse : ${comp.name}` },
+            unit_amount: comp.price_cents
+          },
+          quantity: 1
+        });
+      }
+      optionsText = `Options incluses : ${names.join(', ')}\n`;
+    }
+
     if (physicalShipping && physicalShipping.enabled && shipPriceCents > 0) {
       line_items.push({
         price_data: {
@@ -1214,13 +1233,15 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
         buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
         buyer_email: String(buyer.email || '').substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499), 
-        price_paid_cents: String(template.price_cents || 0).substring(0, 499),
+        // 🎯 On ajoute le prix des options à la valeur de base du bon cadeau !
+        price_paid_cents: String((template.price_cents || 0) + optionsTotalCents).substring(0, 499),
         validity_months: String(template.validity_months || 12).substring(0, 499),
         flight_type_id: String(template.flight_type_id || '').substring(0, 499),
         image_url: String(template.image_url || '').substring(0, 499),
         pdf_background_url: String(template.pdf_background_url || '').substring(0, 499),
-        // 🎯 On sauvegarde l'adresse postale
-        buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : ''
+        buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : '',
+        // 🎯 On écrit les options dans les notes pour que vous puissiez le voir dans le backoffice
+        notes: String(optionsText).substring(0, 499) 
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
