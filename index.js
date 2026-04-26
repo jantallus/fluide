@@ -69,6 +69,12 @@ pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS show_popup 
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS popup_content TEXT;`).catch(() => {});
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;`).catch(() => {});
 
+// 🎯 NOUVEAU : Lignes personnalisées pour le texte du PDF
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
+
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
 // ==========================================
@@ -147,22 +153,39 @@ async function generatePDFBuffer(voucher) {
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
 
-    // 🎯 On utilise la nouvelle image de fond PDF
-    const backgroundSrc = voucher.pdf_background_url && voucher.pdf_background_url !== '' ? voucher.pdf_background_url : 'cadeau-background.jpg';
+    const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
-    doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
+    // --- MISE EN PAGE : TEXTE DYNAMIQUE DANS "VALABLE POUR" ---
+    const bottomY = 635;
+
+    doc.fillColor('#1e40af').font('Helvetica-Bold').fontSize(20).text('FLUIDE PARAPENTE', 50, bottomY);
     
-    doc.fillColor('#64748b').fontSize(14).font('Helvetica-Bold').text('OFFERT PAR :', 60, 355);
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('OFFERT PAR :', 50, bottomY + 25, { characterSpacing: 1 });
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 50, bottomY + 35);
     
-    const safeBuyerName = voucher.buyer_name || 'Client Inconnu';
-    doc.fillColor('#1e40af').fontSize(24).text(safeBuyerName.toUpperCase(), 60, 380);
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('VALABLE POUR :', 50, bottomY + 55, { characterSpacing: 1 });
     
-    const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
-    doc.fontSize(28).text(giftName.toUpperCase(), 60, 505);
-    doc.fontSize(42).fillColor('#f026b8').text(voucher.code, 60, 595, { characterSpacing: 4 });
-    
+    // 🎯 MAGIE : Si on a écrit un texte personnalisé, on l'affiche. Sinon, nom par défaut.
+    if (voucher.custom_line_1 || voucher.custom_line_2) {
+      const customText = [voucher.custom_line_1, voucher.custom_line_2].filter(Boolean).join(' - ');
+      // Taille 10 pour que la longue phrase rentre bien
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(customText.toUpperCase(), 50, bottomY + 67, { width: 495, lineGap: 2 });
+    } else {
+      const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(giftName.toUpperCase(), 50, bottomY + 67);
+    }
+
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('CODE DU BON :', 50, bottomY + 105, { characterSpacing: 1 });
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(22).text(voucher.code, 50, bottomY + 115, { characterSpacing: 2 });
+
+    const dateV = new Date();
+    dateV.setMonth(dateV.getMonth() + 18);
+    const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 50, bottomY + 145);
+
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluideparapente.com', 0, 815, { align: 'center', width: 595 });
+
     doc.end();
   });
 }
@@ -973,25 +996,57 @@ app.get('/api/gift-card-templates', async (req, res) => {
 });
 
 app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup } = req.body;
+  const { 
+    title, description, price_cents, flight_type_id, validity_months, 
+    image_url, is_published, pdf_background_url, popup_content, 
+    show_popup, custom_line_1, custom_line_2 
+  } = req.body;
+
   try {
     const r = await pool.query(
-      `INSERT INTO gift_card_templates (title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, popup_content || null, show_popup || false]
+      `INSERT INTO gift_card_templates (
+        title, description, price_cents, flight_type_id, validity_months, 
+        image_url, is_published, pdf_background_url, popup_content, 
+        show_popup, custom_line_1, custom_line_2
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [
+        title, description, price_cents, flight_type_id || null, validity_months || 12, 
+        image_url || null, is_published || false, pdf_background_url || null, 
+        popup_content || null, show_popup || false, custom_line_1 || null, custom_line_2 || null
+      ]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
-  const { title, description, price_cents, flight_type_id, validity_months, image_url, is_published, pdf_background_url, popup_content, show_popup } = req.body;
+  const { 
+    title, description, price_cents, flight_type_id, validity_months, 
+    image_url, is_published, pdf_background_url, popup_content, 
+    show_popup, custom_line_1, custom_line_2 
+  } = req.body;
+
   try {
     await pool.query(
-      `UPDATE gift_card_templates SET title = $1, description = $2, price_cents = $3, flight_type_id = $4, validity_months = $5, image_url = $6, is_published = $7, pdf_background_url = $8, popup_content = $9, show_popup = $10 WHERE id = $11`,
-      [title, description, price_cents, flight_type_id || null, validity_months || 12, image_url || null, is_published || false, pdf_background_url || null, popup_content || null, show_popup || false, req.params.id]
+      `UPDATE gift_card_templates SET 
+        title = $1, description = $2, price_cents = $3, flight_type_id = $4, 
+        validity_months = $5, image_url = $6, is_published = $7, 
+        pdf_background_url = $8, popup_content = $9, show_popup = $10, 
+        custom_line_1 = $11, custom_line_2 = $12 
+      WHERE id = $13`,
+      [
+        title, description, price_cents, flight_type_id || null, validity_months || 12, 
+        image_url || null, is_published || false, pdf_background_url || null, 
+        popup_content || null, show_popup || false, custom_line_1 || null, 
+        custom_line_2 || null, req.params.id
+      ]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
 });
 
 app.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
@@ -1592,39 +1647,39 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
 
     const voucher = voucherRes.rows[0];
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
-
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=Bon_Cadeau_${voucher.code}.pdf`);
     doc.pipe(res);
 
-    // 🎯 On utilise le fond PDF intelligent !
-    const backgroundSrc = voucher.pdf_background_url && voucher.pdf_background_url !== '' ? voucher.pdf_background_url : '/cadeau-background.jpg';
+    const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    doc.fillColor('white').font('Helvetica-Bold').fontSize(38).text('FLUIDE PARAPENTE', 60, 230);
-    doc.font('Helvetica').fontSize(24).text('BON CADEAU', 60, 270);
-    doc.font('Helvetica').fontSize(10).text('Fluide Parapente - La Clusaz', 0, 765, { align: 'center', width: 595 });
-    doc.text('Tél : 06 12 34 56 78 - www.fluideparapente.com', 0, 780, { align: 'center', width: 595 });
+    const bottomY = 635;
 
-    doc.fillColor('#0f172a').font('Helvetica-Bold');
-    doc.fontSize(10).fillColor('#64748b').text('OFFERT PAR', 60, 380, { characterSpacing: 2 });
-    doc.fontSize(22).fillColor('#1e40af').text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 60, 395);
-
-    doc.fontSize(10).fillColor('#64748b').text('VALABLE POUR', 60, 490, { characterSpacing: 2 });
-    if (voucher.flight_name) {
-      doc.fontSize(28).fillColor('#1e40af').text(voucher.flight_name.toUpperCase(), 60, 505);
+    doc.fillColor('#1e40af').font('Helvetica-Bold').fontSize(20).text('FLUIDE PARAPENTE', 50, bottomY);
+    
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('OFFERT PAR :', 50, bottomY + 25, { characterSpacing: 1 });
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 50, bottomY + 35);
+    
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('VALABLE POUR :', 50, bottomY + 55, { characterSpacing: 1 });
+    
+    if (voucher.custom_line_1 || voucher.custom_line_2) {
+      const customText = [voucher.custom_line_1, voucher.custom_line_2].filter(Boolean).join(' - ');
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(customText.toUpperCase(), 50, bottomY + 67, { width: 495, lineGap: 2 });
     } else {
-      doc.fontSize(28).fillColor('#1e40af').text(`UN AVOIR LIBRE DE ${voucher.price_paid_cents / 100}€`, 60, 505);
+      const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(giftName.toUpperCase(), 50, bottomY + 67);
     }
 
-    doc.fontSize(10).fillColor('#64748b').text("CODE D'ACTIVATION UNIQUE", 60, 580, { characterSpacing: 2 });
-    doc.fontSize(42).fillColor('#f026b8').text(voucher.code, 60, 595, { characterSpacing: 4 });
+    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('CODE DU BON :', 50, bottomY + 105, { characterSpacing: 1 });
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(22).text(voucher.code, 50, bottomY + 115, { characterSpacing: 2 });
 
-    const expiryDate = new Date(voucher.valid_until);
-    const formattedDate = isNaN(expiryDate.getTime()) ? '18 MOIS' : expiryDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    const dateV = new Date(voucher.created_at || new Date());
+    dateV.setMonth(dateV.getMonth() + 18);
+    const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 50, bottomY + 145);
 
-    doc.fontSize(10).fillColor('#64748b').text("DATE D'EXPIRATION", 60, 680, { characterSpacing: 2 });
-    doc.fontSize(20).fillColor('#1e40af').text(formattedDate.toUpperCase(), 60, 695);
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluideparapente.com', 0, 815, { align: 'center', width: 595 });
 
     doc.end();
   } catch (err) {
