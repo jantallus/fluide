@@ -85,7 +85,13 @@ const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 async function drawBackground(doc, urlOrPath) {
   if (urlOrPath && urlOrPath.startsWith('http')) {
       try {
-          const response = await fetch(urlOrPath);
+          // 🎯 MAGIE : On force Cloudinary à envoyer un format JPG pour ne pas faire planter PDFKit
+          let finalUrl = urlOrPath;
+          if (finalUrl.includes('cloudinary.com') && !finalUrl.includes('f_jpg')) {
+              finalUrl = finalUrl.replace('/upload/', '/upload/f_jpg/');
+          }
+
+          const response = await fetch(finalUrl);
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           doc.image(buffer, 0, 0, { width: 595, height: 842 });
@@ -156,33 +162,35 @@ async function generatePDFBuffer(voucher) {
     const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    // --- MISE EN PAGE : TEXTE DYNAMIQUE DANS "VALABLE POUR" ---
-    const bottomY = 635;
+    // --- MISE EN PAGE MILLIMÉTRÉE CORRIGÉE (1mm = 2.834pt) ---
+    
+    // 1. Nom de l'acheteur : 50mm du bord GAUCHE et 146mm du haut (153 - 7)
+    const buyerX = 46 * 2.834;
+    const buyerY = 150 * 2.834;
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), buyerX, buyerY);
+    
+    // 2. Code du bon : 93mm du bord GAUCHE et 179mm du haut (186 - 7)
+    const codeX = 90 * 2.834;
+    const codeY = 183 * 2.834;
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
 
-    doc.fillColor('#1e40af').font('Helvetica-Bold').fontSize(20).text('FLUIDE PARAPENTE', 50, bottomY);
-    
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('OFFERT PAR :', 50, bottomY + 25, { characterSpacing: 1 });
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 50, bottomY + 35);
-    
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('VALABLE POUR :', 50, bottomY + 55, { characterSpacing: 1 });
-    
-    // 🎯 MAGIE : Si on a écrit un texte personnalisé, on l'affiche. Sinon, nom par défaut.
-    if (voucher.custom_line_1 || voucher.custom_line_2) {
-      const customText = [voucher.custom_line_1, voucher.custom_line_2].filter(Boolean).join(' - ');
-      // Taille 10 pour que la longue phrase rentre bien
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(customText.toUpperCase(), 50, bottomY + 67, { width: 495, lineGap: 2 });
-    } else {
-      const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(giftName.toUpperCase(), 50, bottomY + 67);
+    // 3. Texte dynamique (Lignes séparées)
+    const textY = 230 * 2.834; 
+    if (voucher.custom_line_1) {
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_1.toUpperCase(), 50, textY, { width: 495 });
+    }
+    if (voucher.custom_line_2) {
+      // On ajoute 15 points (env. 5mm) pour créer la deuxième ligne
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
     }
 
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('CODE DU BON :', 50, bottomY + 105, { characterSpacing: 1 });
-    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(22).text(voucher.code, 50, bottomY + 115, { characterSpacing: 2 });
-
+    // Date de validité et mentions obligatoires
     const dateV = new Date();
     dateV.setMonth(dateV.getMonth() + 18);
     const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 50, bottomY + 145);
+    // Calcul de la hauteur : Hauteur du code (codeY) + taille de la police du code (~14pt) + 8mm (8 * 2.834)
+    const dateY = codeY + 14 + (13 * 2.834);
+    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
 
     doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluideparapente.com', 0, 815, { align: 'center', width: 595 });
 
@@ -1288,15 +1296,16 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
         buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
         buyer_email: String(buyer.email || '').substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499), 
-        // 🎯 On ajoute le prix des options à la valeur de base du bon cadeau !
         price_paid_cents: String((template.price_cents || 0) + optionsTotalCents).substring(0, 499),
         validity_months: String(template.validity_months || 12).substring(0, 499),
         flight_type_id: String(template.flight_type_id || '').substring(0, 499),
         image_url: String(template.image_url || '').substring(0, 499),
         pdf_background_url: String(template.pdf_background_url || '').substring(0, 499),
         buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : '',
-        // 🎯 On écrit les options dans les notes pour que vous puissiez le voir dans le backoffice
-        notes: String(optionsText).substring(0, 499) 
+        notes: String(optionsText).substring(0, 499),
+        // 🎯 NOUVEAU : On glisse les lignes de texte dans le sac à dos de Stripe
+        custom_line_1: String(template.custom_line_1 || '').substring(0, 499),
+        custom_line_2: String(template.custom_line_2 || '').substring(0, 499)
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
@@ -1563,8 +1572,8 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       }
 
       await client.query(
-        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address) 
-         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9)`,
+        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address, custom_line_1, custom_line_2) 
+         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9, $10, $11)`,
         [
           finalCode, 
           session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, 
@@ -1572,9 +1581,11 @@ app.post('/api/public/confirm-booking', async (req, res) => {
           session.metadata.buyer_phone || null, 
           parseInt(session.metadata.price_paid_cents) || 0, 
           validUntil, 
-          finalNotes, // 👈 Les notes avec l'adresse
+          finalNotes, 
           session.metadata.pdf_background_url || null,
-          session.metadata.buyer_address || null
+          session.metadata.buyer_address || null,
+          session.metadata.custom_line_1 || null, // 👈 Ligne 1 réceptionnée !
+          session.metadata.custom_line_2 || null  // 👈 Ligne 2 réceptionnée !
         ]
       );
 
@@ -1588,7 +1599,9 @@ app.post('/api/public/confirm-booking', async (req, res) => {
               buyer_name: session.metadata.buyer_name, 
               price_paid_cents: session.metadata.price_paid_cents, 
               flight_name: isSpecific ? "Vol en parapente" : null, 
-              pdf_background_url: session.metadata.pdf_background_url // 👈 Transfert pour générer l'image
+              pdf_background_url: session.metadata.pdf_background_url,
+              custom_line_1: session.metadata.custom_line_1, // 👈 Imprimée sur le PDF
+              custom_line_2: session.metadata.custom_line_2  // 👈 Imprimée sur le PDF
           });
           await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${(parseInt(session.metadata.price_paid_cents)||0)/100}€`, finalCode, "", null, pdfBuf);
         } catch (e) { console.error("❌ Erreur notifications Bon Cadeau:", e); }
@@ -1654,30 +1667,28 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    const bottomY = 635;
+    // Calculs millimétrés identiques
+    const buyerX = 46 * 2.834;
+    const buyerY = 150 * 2.834;
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), buyerX, buyerY);
+    
+    const codeX = 90 * 2.834;
+    const codeY = 183 * 2.834;
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
 
-    doc.fillColor('#1e40af').font('Helvetica-Bold').fontSize(20).text('FLUIDE PARAPENTE', 50, bottomY);
-    
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('OFFERT PAR :', 50, bottomY + 25, { characterSpacing: 1 });
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || 'Client Inconnu').toUpperCase(), 50, bottomY + 35);
-    
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('VALABLE POUR :', 50, bottomY + 55, { characterSpacing: 1 });
-    
-    if (voucher.custom_line_1 || voucher.custom_line_2) {
-      const customText = [voucher.custom_line_1, voucher.custom_line_2].filter(Boolean).join(' - ');
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(customText.toUpperCase(), 50, bottomY + 67, { width: 495, lineGap: 2 });
-    } else {
-      const giftName = voucher.flight_name || `UN AVOIR DE ${voucher.price_paid_cents / 100}€`;
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(giftName.toUpperCase(), 50, bottomY + 67);
+    const textY = 230 * 2.834; 
+    if (voucher.custom_line_1) {
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_1.toUpperCase(), 50, textY, { width: 495 });
     }
-
-    doc.fillColor('#64748b').font('Helvetica').fontSize(8).text('CODE DU BON :', 50, bottomY + 105, { characterSpacing: 1 });
-    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(22).text(voucher.code, 50, bottomY + 115, { characterSpacing: 2 });
+    if (voucher.custom_line_2) {
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
+    }
 
     const dateV = new Date(voucher.created_at || new Date());
     dateV.setMonth(dateV.getMonth() + 18);
     const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 50, bottomY + 145);
+    const dateY = codeY + 14 + (13 * 2.834);
+    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
 
     doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluideparapente.com', 0, 815, { align: 'center', width: 595 });
 
