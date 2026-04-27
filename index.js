@@ -72,8 +72,10 @@ pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN
 // 🎯 NOUVEAU : Lignes personnalisées pour le texte du PDF
 pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
 pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
+pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(60);`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
+pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(60);`).catch(() => {});
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
@@ -182,6 +184,9 @@ async function generatePDFBuffer(voucher) {
     if (voucher.custom_line_2) {
       // On ajoute 15 points (env. 5mm) pour créer la deuxième ligne
       doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
+    }
+    if (voucher.custom_line_3) {
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_3.toUpperCase(), 50, textY + 30, { width: 495 });
     }
 
     // Date de validité et mentions obligatoires
@@ -1007,7 +1012,7 @@ app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
   const { 
     title, description, price_cents, flight_type_id, validity_months, 
     image_url, is_published, pdf_background_url, popup_content, 
-    show_popup, custom_line_1, custom_line_2 
+    show_popup, custom_line_1, custom_line_2, custom_line_3 
   } = req.body;
 
   try {
@@ -1015,25 +1020,23 @@ app.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
       `INSERT INTO gift_card_templates (
         title, description, price_cents, flight_type_id, validity_months, 
         image_url, is_published, pdf_background_url, popup_content, 
-        show_popup, custom_line_1, custom_line_2
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        show_popup, custom_line_1, custom_line_2, custom_line_3
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
       [
         title, description, price_cents, flight_type_id || null, validity_months || 12, 
         image_url || null, is_published || false, pdf_background_url || null, 
-        popup_content || null, show_popup || false, custom_line_1 || null, custom_line_2 || null
+        popup_content || null, show_popup || false, custom_line_1 || null, custom_line_2 || null, custom_line_3 || null
       ]
     );
     res.json(r.rows[0]);
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
   const { 
     title, description, price_cents, flight_type_id, validity_months, 
     image_url, is_published, pdf_background_url, popup_content, 
-    show_popup, custom_line_1, custom_line_2 
+    show_popup, custom_line_1, custom_line_2, custom_line_3 
   } = req.body;
 
   try {
@@ -1042,13 +1045,13 @@ app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
         title = $1, description = $2, price_cents = $3, flight_type_id = $4, 
         validity_months = $5, image_url = $6, is_published = $7, 
         pdf_background_url = $8, popup_content = $9, show_popup = $10, 
-        custom_line_1 = $11, custom_line_2 = $12 
-      WHERE id = $13`,
+        custom_line_1 = $11, custom_line_2 = $12, custom_line_3 = $13 
+      WHERE id = $14`, // 👈 CORRECTION : C'est le 14ème paramètre
       [
         title, description, price_cents, flight_type_id || null, validity_months || 12, 
         image_url || null, is_published || false, pdf_background_url || null, 
         popup_content || null, show_popup || false, custom_line_1 || null, 
-        custom_line_2 || null, req.params.id
+        custom_line_2 || null, custom_line_3 || null, req.params.id // 👈 CORRECTION : custom_line_3 ajouté
       ]
     );
     res.json({ success: true });
@@ -1305,7 +1308,8 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
         notes: String(optionsText).substring(0, 499),
         // 🎯 NOUVEAU : On glisse les lignes de texte dans le sac à dos de Stripe
         custom_line_1: String(template.custom_line_1 || '').substring(0, 499),
-        custom_line_2: String(template.custom_line_2 || '').substring(0, 499)
+        custom_line_2: String(template.custom_line_2 || '').substring(0, 499),
+        custom_line_3: String(template.custom_line_3 || '').substring(0, 499) // 👈 NOUVEAU
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
@@ -1572,8 +1576,8 @@ app.post('/api/public/confirm-booking', async (req, res) => {
       }
 
       await client.query(
-        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address, custom_line_1, custom_line_2) 
-         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9, $10, $11)`,
+        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address, custom_line_1, custom_line_2, custom_line_3) 
+         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9, $10, $11, $12)`,
         [
           finalCode, 
           session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, 
@@ -1584,8 +1588,9 @@ app.post('/api/public/confirm-booking', async (req, res) => {
           finalNotes, 
           session.metadata.pdf_background_url || null,
           session.metadata.buyer_address || null,
-          session.metadata.custom_line_1 || null, // 👈 Ligne 1 réceptionnée !
-          session.metadata.custom_line_2 || null  // 👈 Ligne 2 réceptionnée !
+          session.metadata.custom_line_1 || null, 
+          session.metadata.custom_line_2 || null, // 👈 CORRECTION : La fameuse virgule manquante !
+          session.metadata.custom_line_3 || null  
         ]
       );
 
@@ -1600,8 +1605,9 @@ app.post('/api/public/confirm-booking', async (req, res) => {
               price_paid_cents: session.metadata.price_paid_cents, 
               flight_name: isSpecific ? "Vol en parapente" : null, 
               pdf_background_url: session.metadata.pdf_background_url,
-              custom_line_1: session.metadata.custom_line_1, // 👈 Imprimée sur le PDF
-              custom_line_2: session.metadata.custom_line_2  // 👈 Imprimée sur le PDF
+              custom_line_1: session.metadata.custom_line_1, 
+              custom_line_2: session.metadata.custom_line_2, // 👈 CORRECTION : Virgule ajoutée !
+              custom_line_3: session.metadata.custom_line_3  
           });
           await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${(parseInt(session.metadata.price_paid_cents)||0)/100}€`, finalCode, "", null, pdfBuf);
         } catch (e) { console.error("❌ Erreur notifications Bon Cadeau:", e); }
