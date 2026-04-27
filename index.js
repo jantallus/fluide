@@ -1669,14 +1669,14 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
 
     // Calculs millimétrés identiques
     const buyerX = 46 * 2.834;
-    const buyerY = 150 * 2.834;
+    const buyerY = 184 * 2.834;//plus 34mm
     doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
     
     const codeX = 90 * 2.834;
-    const codeY = 218 * 2.834; //plus 35mm
+    const codeY = 217 * 2.834; //plus 34mm
     doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
 
-    const textY = 230 * 2.834; 
+    const textY = 264 * 2.834; //plus 34mm
     if (voucher.custom_line_1) {
       doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_1.toUpperCase(), 50, textY, { width: 495 });
     }
