@@ -1673,7 +1673,7 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
     
     const codeX = 90 * 2.834;
-    const codeY = 203 * 2.834; //plus 20mm
+    const codeY = 223 * 2.834; //plus 40mm
     doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
 
     const textY = 230 * 2.834; 
