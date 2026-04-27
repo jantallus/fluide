@@ -1670,7 +1670,7 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     // Calculs millimétrés identiques
     const buyerX = 46 * 2.834;
     const buyerY = 150 * 2.834;
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), buyerX, buyerY);
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
     
     const codeX = 90 * 2.834;
     const codeY = 183 * 2.834;
