@@ -1683,6 +1683,9 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
     if (voucher.custom_line_2) {
       doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
     }
+    if (voucher.custom_line_3) {
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_3.toUpperCase(), 50, textY + 30, { width: 495 });
+    }
 
     const dateV = new Date(voucher.created_at || new Date());
     dateV.setMonth(dateV.getMonth() + 18);
