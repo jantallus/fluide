@@ -33,7 +33,7 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}));
+}))
 
 app.use(express.json());
 
@@ -41,6 +41,32 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
+
+(async () => {
+  try {
+    // 1. On s'assure que les colonnes existent
+    await pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(255);`);
+    
+    // 2. On les agrandit au MAXIMUM (255 caractères) pour être tranquille à vie !
+    await pool.query(`ALTER TABLE gift_card_templates ALTER COLUMN custom_line_1 TYPE VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_card_templates ALTER COLUMN custom_line_2 TYPE VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_card_templates ALTER COLUMN custom_line_3 TYPE VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ALTER COLUMN custom_line_1 TYPE VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ALTER COLUMN custom_line_2 TYPE VARCHAR(255);`);
+    await pool.query(`ALTER TABLE gift_cards ALTER COLUMN custom_line_3 TYPE VARCHAR(255);`);
+    
+    console.log("✅ Base de données parfaitement à jour : Lignes PDF élargies à 255 caractères !");
+  } catch (err) {
+    // Si la base râle un peu, le serveur ne plantera pas !
+    console.log("⚠️ Info DB : Ajustement mineur ignoré.", err.message);
+  }
+})();
+
 
 // 🎯 LA RUSTINE MAGIQUE : Le serveur met à jour la base de données tout seul
 pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS buyer_phone VARCHAR(50);`)
@@ -68,14 +94,6 @@ pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS show_popup 
 // 🎯 NOUVEAU : On ajoute les cases pour la popup des vols
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS popup_content TEXT;`).catch(() => {});
 pool.query(`ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;`).catch(() => {});
-
-// 🎯 NOUVEAU : Lignes personnalisées pour le texte du PDF
-pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
-pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
-pool.query(`ALTER TABLE gift_card_templates ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(60);`).catch(() => {});
-pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_1 VARCHAR(60);`).catch(() => {});
-pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_2 VARCHAR(60);`).catch(() => {});
-pool.query(`ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS custom_line_3 VARCHAR(60);`).catch(() => {});
 
 const JWT_SECRET = process.env.JWT_SECRET || "fluide_secret_key_2026";
 
@@ -164,36 +182,31 @@ async function generatePDFBuffer(voucher) {
     const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    // --- MISE EN PAGE MILLIMÉTRÉE CORRIGÉE (1mm = 2.834pt) ---
+    // 1. Nom de l'acheteur (Parfaitement centré avec X = 0 et width = 595)
+    const buyerY = 184 * 2.834;
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(String(voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
     
-    // 1. Nom de l'acheteur : 50mm du bord GAUCHE et 146mm du haut (153 - 7)
-    const buyerX = 46 * 2.834;
-    const buyerY = 150 * 2.834;
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), buyerX, buyerY);
-    
-    // 2. Code du bon : 93mm du bord GAUCHE et 179mm du haut (186 - 7)
+    // 2. Code du bon
     const codeX = 90 * 2.834;
-    const codeY = 183 * 2.834;
-    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
+    const codeY = 217 * 2.834; 
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(String(voucher.code), codeX, codeY, { characterSpacing: 2 });
 
-    // 3. Texte dynamique (Lignes séparées)
-    const textY = 230 * 2.834; 
+    // 3. Texte dynamique (Taille 10, zone de texte élargie à 535 pour garantir 75 signes)
+    const textY = 264 * 2.834; 
     if (voucher.custom_line_1) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_1.toUpperCase(), 50, textY, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_1).toUpperCase(), 30, textY, { width: 535, align: 'center' });
     }
     if (voucher.custom_line_2) {
-      // On ajoute 15 points (env. 5mm) pour créer la deuxième ligne
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_2).toUpperCase(), 30, textY + 15, { width: 535, align: 'center' });
     }
     if (voucher.custom_line_3) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_3.toUpperCase(), 50, textY + 30, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_3).toUpperCase(), 30, textY + 30, { width: 535, align: 'center' });
     }
 
-    // Date de validité et mentions obligatoires
+    // Date de validité (Parfaitement centrée sous le code)
     const dateV = new Date();
     dateV.setMonth(dateV.getMonth() + 18);
     const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-    // Calcul de la hauteur : Hauteur du code (codeY) + taille de la police du code (~14pt) + 8mm (8 * 2.834)
     const dateY = codeY + 14 + (13 * 2.834);
     doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
 
@@ -1046,12 +1059,12 @@ app.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
         validity_months = $5, image_url = $6, is_published = $7, 
         pdf_background_url = $8, popup_content = $9, show_popup = $10, 
         custom_line_1 = $11, custom_line_2 = $12, custom_line_3 = $13 
-      WHERE id = $14`, // 👈 CORRECTION : C'est le 14ème paramètre
+      WHERE id = $14`,
       [
         title, description, price_cents, flight_type_id || null, validity_months || 12, 
         image_url || null, is_published || false, pdf_background_url || null, 
         popup_content || null, show_popup || false, custom_line_1 || null, 
-        custom_line_2 || null, custom_line_3 || null, req.params.id // 👈 CORRECTION : custom_line_3 ajouté
+        custom_line_2 || null, custom_line_3 || null, req.params.id
       ]
     );
     res.json({ success: true });
@@ -1307,9 +1320,9 @@ app.post('/api/public/checkout-gift-card', async (req, res) => {
         buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : '',
         notes: String(optionsText).substring(0, 499),
         // 🎯 NOUVEAU : On glisse les lignes de texte dans le sac à dos de Stripe
-        custom_line_1: String(template.custom_line_1 || '').substring(0, 499),
-        custom_line_2: String(template.custom_line_2 || '').substring(0, 499),
-        custom_line_3: String(template.custom_line_3 || '').substring(0, 499) // 👈 NOUVEAU
+        custom_line_1: String(template.custom_line_1 || '').substring(0, 80),
+        custom_line_2: String(template.custom_line_2 || '').substring(0, 80),
+        custom_line_3: String(template.custom_line_3 || '').substring(0, 80) // 👈 NOUVEAU
       }
     };
     const session = await stripe.checkout.sessions.create(sessionConfig);
@@ -1546,11 +1559,25 @@ app.post('/api/public/checkout', async (req, res) => {
 });
 
 // 🎯 SECURISE : CONFIRMATION DES PAIEMENTS
+// 🛡️ NOUVEAU : Mémoire anti-doublon (Empêche React de valider 2 fois le même achat)
+const activeCheckoutSessions = new Set();
+
+// 🎯 SECURISE : CONFIRMATION DES PAIEMENTS
 app.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 
   if (session_id.startsWith('GRATUIT_')) return res.json({ success: true });
+
+  // 🛡️ SÉCURITÉ ANTI-DOUBLON : Si le serveur est déjà en train de traiter cet achat, on bloque !
+  if (activeCheckoutSessions.has(session_id)) {
+    console.log("🛡️ Doublon bloqué par sécurité pour la session :", session_id);
+    return res.json({ success: true, message: "Achat déjà validé" });
+  }
+  activeCheckoutSessions.add(session_id); // 🔒 On verrouille la session
+
+  // On programme le nettoyage du verrou après 1 heure pour ne pas saturer la mémoire
+  setTimeout(() => activeCheckoutSessions.delete(session_id), 3600000);
 
   const client = await pool.connect(); 
   try {
@@ -1651,6 +1678,7 @@ app.post('/api/public/confirm-booking', async (req, res) => {
 
   } catch (err) {
     await client.query('ROLLBACK'); 
+    activeCheckoutSessions.delete(session_id); // 🔓 On déverrouille si ça a planté
     console.error("❌ ERREUR CRITIQUE CONFIRMATION:", err);
     res.status(500).json({ error: err.message });
   } finally {
@@ -1666,31 +1694,32 @@ app.get('/api/public/download-gift-card/:code', async (req, res) => {
 
     const voucher = voucherRes.rows[0];
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
+    
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=Bon_Cadeau_${voucher.code}.pdf`);
+    // 🎯 LA CORRECTION EST ICI : Ajout des guillemets (") autour du filename !
+    res.setHeader('Content-Disposition', `attachment; filename="Bon_Cadeau_${voucher.code}.pdf"`);
     doc.pipe(res);
 
     const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
     await drawBackground(doc, backgroundSrc);
 
-    // Calculs millimétrés identiques
-    const buyerX = 46 * 2.834;
-    const buyerY = 184 * 2.834;//plus 34mm
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text((voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
+    // Positionnement et sécurisation des textes avec String()
+    const buyerY = 184 * 2.834;
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(String(voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
     
     const codeX = 90 * 2.834;
-    const codeY = 217 * 2.834; //plus 34mm
-    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(voucher.code, codeX, codeY, { characterSpacing: 2 });
+    const codeY = 217 * 2.834; 
+    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(String(voucher.code), codeX, codeY, { characterSpacing: 2 });
 
-    const textY = 264 * 2.834; //plus 34mm
+    const textY = 264 * 2.834; 
     if (voucher.custom_line_1) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_1.toUpperCase(), 50, textY, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_1).toUpperCase(), 30, textY, { width: 535, align: 'center' });
     }
     if (voucher.custom_line_2) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_2.toUpperCase(), 50, textY + 15, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_2).toUpperCase(), 30, textY + 15, { width: 535, align: 'center' });
     }
     if (voucher.custom_line_3) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(voucher.custom_line_3.toUpperCase(), 50, textY + 30, { width: 495 });
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_3).toUpperCase(), 30, textY + 30, { width: 535, align: 'center' });
     }
 
     const dateV = new Date(voucher.created_at || new Date());
