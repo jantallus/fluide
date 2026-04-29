@@ -1,24 +1,26 @@
-// db.js
+// db.js — Pool de connexion unique partagé dans toute l'application
 const { Pool } = require('pg');
 require('dotenv').config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Nécessaire pour les connexions externes vers Railway/Heroku
-  }
+  ssl: { rejectUnauthorized: false }
 });
 
-// Test de la connexion à la base de données
 pool.connect((err, client, release) => {
   if (err) {
     console.error('❌ Erreur de connexion à la base de données PostgreSQL :', err.stack);
   } else {
-    console.log('✅ Connecté à la base de données Railway avec succès !');
-    release(); // On libère la connexion pour ne pas bloquer le serveur
+    console.log('✅ Connecté à la base de données avec succès !');
+    release();
   }
+});
+
+pool.on('error', (err) => {
+  console.error('Erreur inattendue du pool de connexion:', err.message);
 });
 
 module.exports = {
   query: (text, params) => pool.query(text, params),
+  pool, // Exporté pour les cas nécessitant l'objet pool directement
 };
