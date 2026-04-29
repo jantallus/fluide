@@ -20,13 +20,14 @@ async function runBackgroundGoogleSync() {
 
     // Le serveur va toquer chez Google silencieusement
     for (const mon of monRes.rows) {
-      try {
-        const resp = await fetch(`${webhookUrl}?monitorName=${mon.first_name}`);
-        const slots = await resp.json();
-        // On sauvegarde directement avec l'ID du pilote (plus rapide pour filtrer plus tard)
-        googleSyncCache.set(mon.id, slots); 
-      } catch(e) { /* On ignore les petites erreurs Google */ }
-    }
+  try {
+    const resp = await fetch(`${webhookUrl}?monitorName=${mon.first_name}`);
+    const slots = await resp.json();
+    googleSyncCache.set(mon.id, slots); 
+  } catch(e) { 
+    console.error("Erreur sync Google pour", mon.first_name, ":", e.message);
+  }
+}
   } catch(e) {
     console.error("Erreur Background Sync:", e);
   } finally {

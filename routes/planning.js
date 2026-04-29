@@ -4,6 +4,30 @@ const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 const { googleSyncCache } = require('../services/googleSync');
+const { notifyGoogleCalendar } = require('../services/email');
+
+// Lit les créneaux Google occupés depuis le cache (chargé par googleSync.js toutes les 2 min)
+async function getGoogleBusySlots(monitorName, webhookUrl) {
+  const monRes = await pool.query(
+    "SELECT id FROM users WHERE first_name = $1 AND is_active_monitor = true LIMIT 1",
+    [monitorName]
+  );
+  if (monRes.rows.length === 0) return [];
+
+  const cached = googleSyncCache.get(monRes.rows[0].id);
+  if (cached && Array.isArray(cached)) {
+    return cached.map(g => ({ start: new Date(g.start).getTime(), end: new Date(g.end).getTime() }));
+  }
+
+  try {
+    const url = webhookUrl + '?monitorName=' + encodeURIComponent(monitorName);
+    const resp = await fetch(url);
+    const slots = await resp.json();
+    return Array.isArray(slots) ? slots.map(g => ({ start: new Date(g.start).getTime(), end: new Date(g.end).getTime() })) : [];
+  } catch (e) {
+    return [];
+  }
+}
 
 router.get('/api/slots', authenticateUser, async (req, res) => {
   try {
@@ -45,7 +69,8 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
 
             slots = slots.map(slot => {
               const slotStart = new Date(slot.start_time).getTime();
-              const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+              const slotEnd = new Date(slot.end_time).getTime();
+              const isBusy = googleBusySlots.some(g => slotStart < g.end && slotEnd > g.start);
               if (slot.monitor_id === mId && isBusy && slot.status === 'available') {
                 return { ...slot, status: 'booked', title: '🚫 BLOQUÉ (Google)', notes: 'Indisponibilité notée sur l\'agenda perso' };
               }
@@ -236,6 +261,14 @@ router.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
     const defs = await client.query("SELECT * FROM slot_definitions WHERE COALESCE(plan_name, 'Standard') = $1", [plan]);
     const mons = await client.query(`SELECT id, available_start_date, available_end_date, daily_start_time, daily_end_time FROM users WHERE is_active_monitor = true AND status = 'Actif' ${monitorFilterSelect}`, paramsSelect);
     
+    // Chargement unique des disponibilités moniteurs (évite N requêtes dans la boucle)
+    const availsResult = await client.query('SELECT * FROM monitor_availabilities');
+    const availsByMonitor = {};
+    for (const a of availsResult.rows) {
+      if (!availsByMonitor[a.user_id]) availsByMonitor[a.user_id] = [];
+      availsByMonitor[a.user_id].push(a);
+    }
+
     let curr = new Date(startDate);
     const last = new Date(endDate);
     const values = [];
@@ -252,7 +285,8 @@ router.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
             
-            const avails = await client.query('SELECT * FROM monitor_availabilities WHERE user_id = $1', [m.id]);
+            const monitorAvails = availsByMonitor[m.id] || [];
+            const avails = { rows: monitorAvails };
               const isAuthorized = avails.rows.some(a => {
                 const startD = new Date(a.start_date);
                 const endD = new Date(a.end_date);

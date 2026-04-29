@@ -55,6 +55,21 @@ const migrations = [
       ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS show_popup BOOLEAN DEFAULT false;
     `
   },
+  {
+    name: '007_monitor_availabilities',
+    sql: `
+      CREATE TABLE IF NOT EXISTS monitor_availabilities (
+        id SERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        daily_start_time TIME NOT NULL,
+        daily_end_time TIME NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_monitor_availabilities_user_id ON monitor_availabilities(user_id);
+    `
+  },
 ];
 
 async function runMigrations() {

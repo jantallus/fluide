@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { runMigrations } = require('./migrate');
+require('./services/googleSync');
 
 const app = express();
 process.env.TZ = 'Europe/Paris';

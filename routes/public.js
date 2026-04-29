@@ -218,7 +218,7 @@ async function performBooking(client, contact, passengers, paymentStatus = null)
             if (clientMessage) desc += `Message client: ${clientMessage}\n`;
 
             if (isFirstSlot) {
-              await notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
+              notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
             }
           }
         }
