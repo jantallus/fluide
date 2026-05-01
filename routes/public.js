@@ -190,11 +190,11 @@ router.post('/api/public/checkout', async (req, res) => {
 
     if (finalPriceCents === 0) {
       await client.query('BEGIN');
-      let pStatus = 'À régler sur place';
+      let pData = null;
       if (appliedVoucher) {
-        pStatus = appliedVoucher.type === 'gift_card' ? `Payé (Bon Cadeau : ${appliedVoucher.code})` : `Payé (Promo : ${appliedVoucher.code})`;
+        pData = { voucher: originalPriceCents, code: appliedVoucher.code, code_type: appliedVoucher.type };
       }
-      await performBooking(client, contact, passengers, pStatus);
+      await performBooking(client, contact, passengers, pData);
       
       if (appliedVoucher) {
         await client.query(`UPDATE gift_cards SET current_uses = current_uses + 1, status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END WHERE id = $1`, [appliedVoucher.id]);
@@ -219,7 +219,9 @@ router.post('/api/public/checkout', async (req, res) => {
       contact_phone: contact.phone ? String(contact.phone).substring(0, 500) : '',
       contact_email: contact.email ? String(contact.email).substring(0, 500) : '',
       contact_notes: contact.notes ? contact.notes.substring(0, 450) : '',
-      voucher_code: appliedVoucher ? appliedVoucher.code : ''
+      voucher_code: appliedVoucher ? appliedVoucher.code : '',
+      voucher_type: appliedVoucher ? appliedVoucher.type : '',
+      voucher_discount_cents: discountAmountCents ? discountAmountCents.toString() : '0'
     };
 
     const chunkSize = 500;
@@ -349,9 +351,18 @@ router.post('/api/public/confirm-booking', async (req, res) => {
     }
     const passengers = JSON.parse(passengersJson);
     
-    let pStatus = session.metadata.voucher_code ? `Payé (CB + Code : ${session.metadata.voucher_code})` : 'Payé (CB en ligne)';
-    
-    await performBooking(client, contact, passengers, pStatus);
+    const voucherCode = session.metadata.voucher_code;
+    const pData = {
+      online: true,
+      cb: session.amount_total || 0,
+      ...(voucherCode ? {
+        code: voucherCode,
+        code_type: session.metadata.voucher_type || 'promo',
+        voucher: parseInt(session.metadata.voucher_discount_cents || '0')
+      } : {})
+    };
+
+    await performBooking(client, contact, passengers, pData);
 
     if (session.metadata.voucher_code) {
         await client.query(`UPDATE gift_cards SET current_uses = current_uses + 1, status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END WHERE UPPER(code) = UPPER($1)`, [session.metadata.voucher_code]);

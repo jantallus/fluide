@@ -18,7 +18,7 @@ router.get('/api/clients', authenticateAdmin, async (req, res) => {
           json_build_object(
             'id', s.id,
             'start_time', s.start_time,
-            'payment_status', s.payment_status,
+            'payment_data', s.payment_data,
             'monitor_name', COALESCE(u.first_name, 'Non assigné'),
             'monitor_id', s.monitor_id,
             'flight_name', COALESCE(ft.name, 'Vol personnalisé'),
@@ -85,24 +85,21 @@ router.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
   if (!ids || ids.length === 0) return res.status(400).json({ error: "Aucun ID" });
   
   try {
-    // 🎯 NOUVEAU : On récupère tous les codes cadeaux des créneaux sélectionnés
-    const slotsRes = await pool.query('SELECT payment_status FROM slots WHERE id = ANY($1::int[])', [ids]);
+    // On récupère tous les codes cadeaux des créneaux sélectionnés
+    const slotsRes = await pool.query('SELECT payment_data FROM slots WHERE id = ANY($1::int[])', [ids]);
     const codesToDelete = [];
-    
+
     for (const row of slotsRes.rows) {
-      if (row.payment_status) {
-        const match = row.payment_status.match(/(?:Code|Promo|Cadeau)\s*:\s*([a-zA-Z0-9_-]+)/i);
-        if (match) codesToDelete.push(match[1].toUpperCase());
+      if (row.payment_data?.code && row.payment_data?.code_type === 'gift_card') {
+        codesToDelete.push(row.payment_data.code.toUpperCase());
       }
     }
 
-    // Si on a trouvé des codes, on les supprime tous en un seul coup
     if (codesToDelete.length > 0) {
       await pool.query(`DELETE FROM gift_cards WHERE UPPER(code) = ANY($1::text[]) AND type = 'gift_card'`, [codesToDelete]);
     }
 
-    // Le nettoyage habituel des créneaux
-    await pool.query(`UPDATE slots SET status = 'available', payment_status = NULL, title = NULL, phone = NULL, email = NULL, notes = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight = NULL WHERE id = ANY($1::int[])`, [ids]);
+    await pool.query(`UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, phone = NULL, email = NULL, notes = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight = NULL WHERE id = ANY($1::int[])`, [ids]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

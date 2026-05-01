@@ -119,17 +119,18 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     }
 
     const result = await pool.query(
-      `UPDATE slots 
+      `UPDATE slots
       SET title = $1, weight = $2, flight_type_id = $3, notes = $4, status = $5,
           monitor_id = COALESCE($6, monitor_id), phone = $8, email = $9, weight_checked = $10,
-          booking_options = $11, client_message = $12, payment_status = COALESCE($13, payment_status)
-      WHERE id = $7 RETURNING *`, 
+          booking_options = $11, client_message = $12,
+          payment_data = COALESCE($13, payment_data)
+      WHERE id = $7 RETURNING *`,
       [
-        title !== undefined ? title : null, weight ? parseInt(weight) : null, flight_type_id ? parseInt(flight_type_id) : null, 
+        title !== undefined ? title : null, weight ? parseInt(weight) : null, flight_type_id ? parseInt(flight_type_id) : null,
         notes !== undefined ? notes : null, status || 'available', monitor_id ? parseInt(monitor_id) : null, slotId,
         phone !== undefined ? phone : null, email !== undefined ? email : null, weightChecked !== undefined ? weightChecked : false,
         booking_options !== undefined ? booking_options : null, client_message !== undefined ? client_message : null,
-        req.body.payment_status !== undefined ? req.body.payment_status : null
+        req.body.payment_data !== undefined ? JSON.stringify(req.body.payment_data) : null
       ]
     );
 
@@ -174,17 +175,17 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
 });
 
 router.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
-  const { payment_status, monitor_id } = req.body;
-  const client = await pool.connect(); 
-  
+  const { payment_data, monitor_id } = req.body;
+  const client = await pool.connect();
+
   try {
     await client.query('BEGIN');
     const currentSlotRes = await client.query('SELECT * FROM slots WHERE id = $1', [req.params.id]);
     if (currentSlotRes.rows.length === 0) throw new Error("Créneau introuvable");
     const currentSlot = currentSlotRes.rows[0];
 
-    if (payment_status !== undefined) {
-       await client.query('UPDATE slots SET payment_status = $1 WHERE id = $2', [payment_status, req.params.id]);
+    if (payment_data !== undefined) {
+      await client.query('UPDATE slots SET payment_data = $1 WHERE id = $2', [payment_data ? JSON.stringify(payment_data) : null, req.params.id]);
     }
 
     if (monitor_id !== undefined) {
@@ -371,20 +372,18 @@ router.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
 
 router.delete('/api/slots/:id', authenticateUser, async (req, res) => {
   try {
-    // 🎯 NOUVEAU : On récupère le code cadeau avant de vider le créneau
-    const slotRes = await pool.query('SELECT payment_status FROM slots WHERE id = $1', [req.params.id]);
-    if (slotRes.rows.length > 0 && slotRes.rows[0].payment_status) {
-      const match = slotRes.rows[0].payment_status.match(/(?:Code|Promo|Cadeau)\s*:\s*([a-zA-Z0-9_-]+)/i);
-      if (match) {
-        const code = match[1].toUpperCase();
-        // On supprime le code de la base, SEULEMENT si c'est un vrai Bon Cadeau (pas une Promo)
-        await pool.query(`DELETE FROM gift_cards WHERE UPPER(code) = $1 AND type = 'gift_card'`, [code]);
+    // On récupère le code cadeau avant de vider le créneau
+    const slotRes = await pool.query('SELECT payment_data FROM slots WHERE id = $1', [req.params.id]);
+    if (slotRes.rows.length > 0 && slotRes.rows[0].payment_data) {
+      const pd = slotRes.rows[0].payment_data;
+      if (pd.code && pd.code_type === 'gift_card') {
+        await pool.query(`DELETE FROM gift_cards WHERE UPPER(code) = $1 AND type = 'gift_card'`, [pd.code.toUpperCase()]);
       }
     }
 
-    // Le nettoyage habituel du créneau
+    // Le nettoyage du créneau
     await pool.query(
-      `UPDATE slots SET status = 'available', payment_status = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL WHERE id = $1`, [req.params.id]
+      `UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL WHERE id = $1`, [req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
