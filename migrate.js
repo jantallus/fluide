@@ -70,6 +70,15 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_monitor_availabilities_user_id ON monitor_availabilities(user_id);
     `
   },
+  {
+    name: '008_processed_stripe_sessions',
+    sql: `
+      CREATE TABLE IF NOT EXISTS processed_stripe_sessions (
+        session_id VARCHAR(255) PRIMARY KEY,
+        processed_at TIMESTAMP DEFAULT NOW()
+      );
+    `
+  },
 ];
 
 async function runMigrations() {

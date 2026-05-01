@@ -4,10 +4,12 @@ const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 const Stripe = require('stripe');
-const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail, notifyGoogleCalendar } = require('../services/email');
+const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail } = require('../services/email');
 const { generatePDFBuffer, drawBackground } = require('../services/pdf');
 const PDFDocument = require('pdfkit');
 const { googleSyncCache } = require('../services/googleSync');
+const { performBooking } = require('../services/booking');
+const { generateICalFeed } = require('../services/ical');
 
 router.get('/api/public/availabilities', async (req, res) => {
   const { start, end } = req.query; 
@@ -128,108 +130,6 @@ router.post('/api/public/checkout-gift-card', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-async function performBooking(client, contact, passengers, paymentStatus = null) {
-  for (const p of passengers) {
-    const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
-    const flight = flightRes.rows[0];
-    const flightDur = flight.duration_minutes || 15;
-
-    const slotsRes = await client.query(`SELECT * FROM slots WHERE start_time::date = $1 AND status = 'available' ORDER BY start_time ASC`, [p.date]);
-    const availableSlots = slotsRes.rows;
-    let baseDur = 15;
-    if (availableSlots.length > 0) {
-      const s1 = new Date(availableSlots[0].start_time).getTime();
-      const e1 = new Date(availableSlots[0].end_time).getTime();
-      baseDur = Math.round((e1 - s1) / 60000) || 15;
-    }
-    const slotsNeeded = Math.ceil(flightDur / baseDur);
-
-    const monSchedules = {};
-    availableSlots.forEach(s => {
-      if (!monSchedules[s.monitor_id]) monSchedules[s.monitor_id] = [];
-      monSchedules[s.monitor_id].push(s);
-    });
-
-    let chosenMonitor = null;
-    let slotsToBook = [];
-
-    for (const monId of Object.keys(monSchedules)) {
-      const monSlots = monSchedules[monId].sort((a,b) => new Date(a.start_time) - new Date(b.start_time));
-      let startIndex = -1;
-      for (let i = 0; i < monSlots.length; i++) {
-         const d = new Date(monSlots[i].start_time);
-         const tStr = d.toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
-         if (tStr === p.time) { startIndex = i; break; }
-      }
-
-      if (startIndex !== -1 && startIndex + slotsNeeded <= monSlots.length) {
-          let isValid = true;
-          let sequence = [monSlots[startIndex]];
-          for (let i = 1; i < slotsNeeded; i++) {
-              const prevEnd = new Date(monSlots[startIndex + i - 1].end_time).getTime();
-              const currStart = new Date(monSlots[startIndex + i].start_time).getTime();
-              if (Math.abs(currStart - prevEnd) > 60000) { isValid = false; break; }
-              sequence.push(monSlots[startIndex + i]);
-          }
-          if (isValid) {
-              chosenMonitor = monId;
-              slotsToBook = sequence;
-              break; 
-          }
-      }
-    }
-
-    if (!chosenMonitor) throw new Error(`Plus de moniteur dispo pour ${p.firstName} à ${p.time}`);
-
-    let optionsNames = [];
-    if (p.selectedComplements && p.selectedComplements.length > 0) {
-      for (const compId of p.selectedComplements) {
-        const compRes = await client.query('SELECT name FROM complements WHERE id = $1', [compId]);
-        if (compRes.rows[0]) optionsNames.push(compRes.rows[0].name);
-      }
-    }
-    const bookingOptions = optionsNames.length > 0 ? optionsNames.join(', ') : null;
-    const clientMessage = contact.notes ? contact.notes : null;
-
-    let isFirstSlot = true;
-    for (const slot of slotsToBook) {
-      const lastName = contact.lastName ? contact.lastName.toUpperCase() : "";
-      const fullName = `${p.firstName} ${lastName}`.trim();
-      const slotTitle = isFirstSlot ? fullName : `↪️ Suite ${fullName}`;
-      const slotNotes = isFirstSlot ? null : 'Extension auto';
-
-      await client.query(`
-        UPDATE slots 
-        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7, payment_status = $9
-        WHERE id = $2
-      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentStatus]);
-      
-// 🎯 NOUVEAU : ON PRÉVIENT GOOGLE INSTANTANÉMENT (SI ACTIVÉ)
-      try {
-        const syncSetting = await client.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
-        if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
-          const monRes = await client.query('SELECT first_name FROM users WHERE id = $1', [chosenMonitor]);
-          if (monRes.rows.length > 0) {
-            const monitorName = monRes.rows[0].first_name;
-            let desc = "";
-            if (contact.phone) desc += `Tel: ${contact.phone}\n`;
-            if (bookingOptions) desc += `Options: ${bookingOptions}\n`;
-            if (clientMessage) desc += `Message client: ${clientMessage}\n`;
-
-            if (isFirstSlot) {
-              notifyGoogleCalendar(monitorName, slotTitle, slot.start_time, slot.end_time, desc);
-            }
-          }
-        }
-      } catch(e) { console.error("Erreur Synchro Google:", e); }
-
-      const index = availableSlots.findIndex(s => s.id === slot.id);
-      if(index > -1) availableSlots.splice(index, 1);
-      isFirstSlot = false;
-    }
-  } 
-}
 
 router.post('/api/public/checkout', async (req, res) => {
   const { contact, passengers, voucher_code } = req.body;
@@ -536,84 +436,14 @@ router.get('/api/public/download-gift-card/:code', async (req, res) => {
 
 router.get('/api/ical/:id', async (req, res) => {
   try {
-    const monitorId = req.params.id;
-    
-    const userRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [monitorId]);
-    if (userRes.rows.length === 0) return res.status(404).send("Moniteur introuvable");
-    const monitorName = userRes.rows[0].first_name;
-
-    // FILTRE 1 : SQL (On enlève le maximum ici)
-    const slotsRes = await pool.query(`
-      SELECT s.*, ft.name as flight_name 
-      FROM slots s 
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id 
-      WHERE s.monitor_id = $1 
-        AND s.status = 'booked' 
-        AND s.title IS NOT NULL
-        AND s.title NOT LIKE '↪️ Suite%' 
-        AND s.title != 'NOTE'
-        AND s.start_time >= NOW() - INTERVAL '30 days'
-      ORDER BY s.start_time ASC
-    `, [monitorId]);
-
-    let ical = "BEGIN:VCALENDAR\r\n";
-    ical += "VERSION:2.0\r\n";
-    ical += `PRODID:-//Fluide Parapente//${monitorName}//FR\r\n`;
-    ical += "CALSCALE:GREGORIAN\r\n";
-    ical += `X-WR-CALNAME:Planning Fluide - ${monitorName}\r\n`; 
-    ical += "X-WR-TIMEZONE:Europe/Paris\r\n";
-
-    const formatDate = (date) => {
-      return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    };
-
-    slotsRes.rows.forEach(slot => {
-      const title = slot.title || "";
-      const upperTitle = title.toUpperCase();
-      
-      // FILTRE 2 : JAVASCRIPT (Barrage absolu anti-pauses et blocages)
-      if (
-        upperTitle.includes('PAUSE') || 
-        upperTitle.includes('NON DISPO') || 
-        title.includes('☕') || 
-        title.includes('❌') ||
-        upperTitle === 'NOTE'
-      ) {
-        return; // On l'éjecte du calendrier !
-      }
-
-      const start = new Date(slot.start_time);
-      const end = new Date(slot.end_time);
-      const flightName = slot.flight_name || "";
-      
-      let summary = title;
-      if (flightName) summary += ` (${flightName})`;
-
-      let description = "";
-      if (slot.phone) description += `Tel: ${slot.phone}\\n`;
-      if (slot.booking_options) description += `Options: ${slot.booking_options}\\n`;
-      if (slot.notes) description += `Notes: ${slot.notes}\\n`;
-      if (slot.client_message) description += `Message client: ${slot.client_message}\\n`;
-
-      ical += "BEGIN:VEVENT\r\n";
-      ical += `UID:slot-${slot.id}@fluide-parapente.fr\r\n`;
-      ical += `DTSTAMP:${formatDate(new Date())}\r\n`;
-      ical += `DTSTART:${formatDate(start)}\r\n`;
-      ical += `DTEND:${formatDate(end)}\r\n`;
-      ical += `SUMMARY:${summary}\r\n`;
-      if (description) ical += `DESCRIPTION:${description}\r\n`;
-      ical += "END:VEVENT\r\n";
-    });
-
-    ical += "END:VCALENDAR\r\n";
-
+    const result = await generateICalFeed(pool, req.params.id);
+    if (!result) return res.status(404).send('Moniteur introuvable');
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="planning_fluide_${monitorName}.ics"`);
-    res.send(ical);
-
+    res.setHeader('Content-Disposition', `attachment; filename="planning_fluide_${result.monitorName}.ics"`);
+    res.send(result.ical);
   } catch (err) {
-    console.error("Erreur génération iCal:", err);
-    res.status(500).send("Erreur lors de la génération du calendrier");
+    console.error('Erreur génération iCal:', err);
+    res.status(500).send('Erreur lors de la génération du calendrier');
   }
 });
 
