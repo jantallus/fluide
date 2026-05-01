@@ -83,6 +83,10 @@ const migrations = [
     name: '009_slots_payment_data',
     sql: `ALTER TABLE slots ADD COLUMN IF NOT EXISTS payment_data JSONB;`
   },
+  {
+    name: '010_slots_drop_payment_status',
+    sql: `ALTER TABLE slots DROP COLUMN IF EXISTS payment_status;`
+  },
 ];
 
 async function runMigrations() {
