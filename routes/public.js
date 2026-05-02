@@ -9,6 +9,7 @@ const { generatePDFBuffer, drawBackground } = require('../services/pdf');
 const PDFDocument = require('pdfkit');
 const { googleSyncCache } = require('../services/googleSync');
 const { performBooking } = require('../services/booking');
+const { processStripeSession } = require('../services/stripeProcessor');
 const { generateICalFeed } = require('../services/ical');
 
 router.get('/api/public/availabilities', async (req, res) => {
@@ -256,140 +257,57 @@ router.post('/api/public/checkout', async (req, res) => {
   }
 });
 
-// 🎯 SECURISE : CONFIRMATION DES PAIEMENTS
-// 🛡️ NOUVEAU : Mémoire anti-doublon (Empêche React de valider 2 fois le même achat)
+// 🎯 SECURISE : CONFIRMATION DES PAIEMENTS (chemin redirect)
+// Verrou mémoire — protection rapide contre les doubles appels concurrents
+// (ex : React StrictMode appelle useEffect deux fois en dev).
+// La protection principale contre les redémarrages/multi-instances est dans
+// processStripeSession() via la table stripe_payments.
 const activeCheckoutSessions = new Set();
 
-// 🎯 SECURISE : CONFIRMATION DES PAIEMENTS
 router.post('/api/public/confirm-booking', async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 
+  // Les paiements gratuits sont traités en amont — rien à confirmer ici
   if (session_id.startsWith('GRATUIT_')) return res.json({ success: true });
 
-  // 🛡️ SÉCURITÉ ANTI-DOUBLON : Si le serveur est déjà en train de traiter cet achat, on bloque !
+  // 🔒 Verrou mémoire : bloque les requêtes concurrentes sur la même instance
   if (activeCheckoutSessions.has(session_id)) {
-    console.log("🛡️ Doublon bloqué par sécurité pour la session :", session_id);
-    return res.json({ success: true, message: "Achat déjà validé" });
+    console.log("🛡️ Doublon concurrent bloqué (verrou mémoire) :", session_id);
+    return res.json({ success: true, message: "Achat déjà en cours de traitement" });
   }
-  activeCheckoutSessions.add(session_id); // 🔒 On verrouille la session
-
-  // On programme le nettoyage du verrou après 1 heure pour ne pas saturer la mémoire
+  activeCheckoutSessions.add(session_id);
   setTimeout(() => activeCheckoutSessions.delete(session_id), 3600000);
 
-  const client = await pool.connect(); 
   try {
     const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status !== 'paid') return res.status(400).json({ error: "Le paiement n'a pas abouti." });
+    if (session.payment_status !== 'paid') {
+      activeCheckoutSessions.delete(session_id);
+      return res.status(400).json({ error: "Le paiement n'a pas abouti." });
+    }
 
-    await client.query('BEGIN'); 
+    // processStripeSession gère l'idempotence DB et tout le traitement
+    const result = await processStripeSession(session);
 
-    // --- CAS 1 : ACHAT BON CADEAU ---
-    if (session.metadata.purchase_type === 'gift_card') {
-      const finalCode = `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-      
-      // 🛡️ SÉCURITÉ ABSOLUE SUR LA DATE
-      const validUntil = new Date();
-      const parsedMonths = parseInt(session.metadata.validity_months);
-      const monthsToAdd = isNaN(parsedMonths) ? 12 : parsedMonths;
-      validUntil.setMonth(validUntil.getMonth() + monthsToAdd);
-
-      // 🛡️ SÉCURITÉ ABSOLUE SUR LA BASE DE DONNÉES
-      let finalNotes = session.metadata.notes || '';
-      if (session.metadata.buyer_address) {
-         finalNotes = `📮 À POSTER : ${session.metadata.buyer_address}\n` + finalNotes;
-      }
-
-      await client.query(
-        `INSERT INTO gift_cards (code, flight_type_id, buyer_name, buyer_phone, beneficiary_name, price_paid_cents, type, status, discount_scope, valid_until, notes, pdf_background_url, buyer_address, custom_line_1, custom_line_2, custom_line_3) 
-         VALUES ($1, $2, $3, $4, '', $5, 'gift_card', 'valid', 'both', $6, $7, $8, $9, $10, $11, $12)`,
-        [
-          finalCode, 
-          session.metadata.flight_type_id ? parseInt(session.metadata.flight_type_id) : null, 
-          session.metadata.buyer_name || 'Client Inconnu', 
-          session.metadata.buyer_phone || null, 
-          parseInt(session.metadata.price_paid_cents) || 0, 
-          validUntil, 
-          finalNotes, 
-          session.metadata.pdf_background_url || null,
-          session.metadata.buyer_address || null,
-          session.metadata.custom_line_1 || null, 
-          session.metadata.custom_line_2 || null, // 👈 CORRECTION : La fameuse virgule manquante !
-          session.metadata.custom_line_3 || null  
-        ]
+    if (result === null) {
+      // Déjà traité (par un webhook ou un appel précédent) — on relit le résultat
+      const stored = await pool.query(
+        'SELECT type, result_code FROM stripe_payments WHERE session_id = $1',
+        [session_id]
       );
-
-      await client.query('COMMIT');
-
-      setImmediate(async () => {
-        try {
-          const isSpecific = !!session.metadata.flight_type_id;
-          const pdfBuf = await generatePDFBuffer({ 
-              code: finalCode, 
-              buyer_name: session.metadata.buyer_name, 
-              price_paid_cents: session.metadata.price_paid_cents, 
-              flight_name: isSpecific ? "Vol en parapente" : null, 
-              pdf_background_url: session.metadata.pdf_background_url,
-              custom_line_1: session.metadata.custom_line_1, 
-              custom_line_2: session.metadata.custom_line_2, // 👈 CORRECTION : Virgule ajoutée !
-              custom_line_3: session.metadata.custom_line_3  
-          });
-          await sendConfirmationEmail(session.metadata.buyer_email, session.metadata.buyer_name, 'gift_card', isSpecific ? "Vol en parapente" : `Avoir de ${(parseInt(session.metadata.price_paid_cents)||0)/100}€`, finalCode, "", null, pdfBuf);
-        } catch (e) { console.error("❌ Erreur notifications Bon Cadeau:", e); }
-      });
-
-      return res.json({ success: true, is_gift_card: true, code: finalCode });
+      const row = stored.rows[0];
+      if (row?.type === 'gift_card') {
+        return res.json({ success: true, is_gift_card: true, code: row.result_code });
+      }
+      return res.json({ success: true });
     }
 
-    // --- CAS 2 : RÉSERVATION VOL ---
-    const contact = { phone: session.metadata.contact_phone || '', email: session.metadata.contact_email || '', notes: session.metadata.contact_notes || '' };
-    let passengersJson = '';
-    let chunkIndex = 0;
-    while (session.metadata[`passengers_chunk_${chunkIndex}`] !== undefined) {
-      passengersJson += session.metadata[`passengers_chunk_${chunkIndex}`];
-      chunkIndex++;
-    }
-    const passengers = JSON.parse(passengersJson);
-    
-    const voucherCode = session.metadata.voucher_code;
-    const pData = {
-      online: true,
-      cb: session.amount_total || 0,
-      ...(voucherCode ? {
-        code: voucherCode,
-        code_type: session.metadata.voucher_type || 'promo',
-        voucher: parseInt(session.metadata.voucher_discount_cents || '0')
-      } : {})
-    };
-
-    await performBooking(client, contact, passengers, pData);
-
-    if (session.metadata.voucher_code) {
-        await client.query(`UPDATE gift_cards SET current_uses = current_uses + 1, status = CASE WHEN max_uses IS NOT NULL AND (current_uses + 1) >= max_uses THEN 'used' ELSE status END WHERE UPPER(code) = UPPER($1)`, [session.metadata.voucher_code]);
-    }
-
-    await client.query('COMMIT'); 
-    res.json({ success: true });
-
-    setImmediate(async () => {
-      try {
-        if (passengers.length > 0) {
-          const firstPass = passengers[0];
-          const beautifulDate = new Date(firstPass.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-          await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
-          await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
-          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
-        }
-      } catch (e) { console.error("❌ Erreur notifications Vol:", e); }
-    });
+    return res.json(result);
 
   } catch (err) {
-    await client.query('ROLLBACK'); 
-    activeCheckoutSessions.delete(session_id); // 🔓 On déverrouille si ça a planté
+    activeCheckoutSessions.delete(session_id);
     console.error("❌ ERREUR CRITIQUE CONFIRMATION:", err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 

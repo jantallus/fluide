@@ -38,6 +38,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+// ⚠️  WEBHOOK STRIPE : doit être enregistré AVANT express.json().
+//     La route utilise express.raw() en interne pour obtenir le body brut
+//     nécessaire à la vérification de signature Stripe.
+app.use('/', require('./routes/webhook'));
+
 app.use(express.json());
 app.use(cookieParser());
 
