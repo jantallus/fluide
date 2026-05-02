@@ -15,6 +15,11 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error('❌ FATAL : STRIPE_SECRET_KEY non défini dans .env — le serveur ne peut pas démarrer.');
+  process.exit(1);
+}
+
 // Configuration CORS
 app.use(cors({
   origin: function (origin, callback) {

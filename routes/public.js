@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
@@ -12,7 +13,39 @@ const { performBooking } = require('../services/booking');
 const { processStripeSession } = require('../services/stripeProcessor');
 const { generateICalFeed } = require('../services/ical');
 
-router.get('/api/public/availabilities', async (req, res) => {
+// ── Rate limiters ──────────────────────────────────────────────────────────────
+
+// Création de session Stripe (vol + bon cadeau) : max 8 tentatives / 15 min / IP
+// Empêche le spam de sessions Stripe (coût + pollution dashboard)
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  message: { error: 'Trop de tentatives de paiement. Veuillez réessayer dans 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Confirmation de paiement : max 20 tentatives / 15 min / IP
+// Empêche le bruteforce de session IDs Stripe
+const confirmLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Trop de requêtes. Veuillez réessayer dans 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Disponibilités : max 60 requêtes / minute / IP (1/s en moyenne)
+// Limite le scraping tout en laissant l'usage normal du tunnel de réservation
+const availabilitiesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: 'Trop de requêtes. Veuillez patienter un instant.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res) => {
   const { start, end } = req.query; 
   try {
     if (!start || !end) return res.status(400).json({ error: "Période requise" });
@@ -26,11 +59,16 @@ router.get('/api/public/availabilities', async (req, res) => {
 
     if (isGoogleSyncEnabled) {
       // 2. On lit simplement la RAM du serveur (0.001 seconde d'attente)
+      // Utilise un vrai test de chevauchement (identique au planning admin) :
+      // un créneau est bloqué si N'IMPORTE QUELLE partie de ce créneau tombe dans l'événement Google.
+      // L'ancienne logique (slotStart >= g.start) manquait les créneaux qui COMMENCENT avant
+      // l'événement mais se TERMINENT pendant celui-ci (ex: créneau 12h20-12h35 vs event 12h30-13h00).
       slots = slots.map(slot => {
         if (slot.status === 'available' && slot.monitor_id) {
           const googleBusySlots = googleSyncCache.get(slot.monitor_id) || [];
           const slotStart = new Date(slot.start_time).getTime();
-          const isBusy = googleBusySlots.some(g => slotStart >= g.start && slotStart < g.end);
+          const slotEnd = new Date(slot.end_time).getTime();
+          const isBusy = googleBusySlots.some(g => slotStart < g.end && slotEnd > g.start);
           if (isBusy) return { ...slot, status: 'booked' };
         }
         return slot;
@@ -52,7 +90,7 @@ router.get('/api/public/site-settings', async (req, res) => {
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
-router.post('/api/public/checkout-gift-card', async (req, res) => {
+router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) => {
   // 🎯 NOUVEAU : On récupère selectedComplements (les options)
   const { template, buyer, physicalShipping, selectedComplements } = req.body; 
   try {
@@ -132,7 +170,7 @@ router.post('/api/public/checkout-gift-card', async (req, res) => {
   }
 });
 
-router.post('/api/public/checkout', async (req, res) => {
+router.post('/api/public/checkout', checkoutLimiter, async (req, res) => {
   const { contact, passengers, voucher_code } = req.body;
   const client = await pool.connect();
 
@@ -142,24 +180,28 @@ router.post('/api/public/checkout', async (req, res) => {
     const line_items = [];
 
     for (const p of passengers) {
-      const flightRes = await client.query('SELECT name, price_cents FROM flight_types WHERE id = $1', [p.flightId]);
+      // On vérifie que le vol existe ET est actif — rejette les IDs invalides ou désactivés
+      const flightRes = await client.query('SELECT name, price_cents FROM flight_types WHERE id = $1 AND is_active = true', [p.flightId]);
       const flight = flightRes.rows[0];
-      if (flight) {
-        flightTotalCents += flight.price_cents;
-        line_items.push({
-          price_data: { currency: 'eur', product_data: { name: `Vol ${flight.name}`, description: `Passager: ${p.firstName} - Le ${p.date} à ${p.time}` }, unit_amount: flight.price_cents }, quantity: 1
-        });
+      if (!flight) {
+        return res.status(400).json({ error: `Type de vol introuvable ou désactivé (id: ${p.flightId})` });
       }
+      flightTotalCents += flight.price_cents;
+      line_items.push({
+        price_data: { currency: 'eur', product_data: { name: `Vol ${flight.name}`, description: `Passager: ${p.firstName} - Le ${p.date} à ${p.time}` }, unit_amount: flight.price_cents }, quantity: 1
+      });
+
       if (p.selectedComplements && p.selectedComplements.length > 0) {
         for (const compId of p.selectedComplements) {
-          const compRes = await client.query('SELECT name, price_cents FROM complements WHERE id = $1', [compId]);
+          const compRes = await client.query('SELECT name, price_cents FROM complements WHERE id = $1 AND is_active = true', [compId]);
           const comp = compRes.rows[0];
-          if (comp) {
-            complementsTotalCents += comp.price_cents;
-            line_items.push({
-              price_data: { currency: 'eur', product_data: { name: `Option: ${comp.name} (pour ${p.firstName})` }, unit_amount: comp.price_cents }, quantity: 1
-            });
+          if (!comp) {
+            return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${compId})` });
           }
+          complementsTotalCents += comp.price_cents;
+          line_items.push({
+            price_data: { currency: 'eur', product_data: { name: `Option: ${comp.name} (pour ${p.firstName})` }, unit_amount: comp.price_cents }, quantity: 1
+          });
         }
       }
     }
@@ -264,7 +306,7 @@ router.post('/api/public/checkout', async (req, res) => {
 // processStripeSession() via la table stripe_payments.
 const activeCheckoutSessions = new Set();
 
-router.post('/api/public/confirm-booking', async (req, res) => {
+router.post('/api/public/confirm-booking', confirmLimiter, async (req, res) => {
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: "Session ID manquant" });
 

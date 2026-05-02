@@ -73,8 +73,8 @@ async function performBooking(client, contact, passengers, paymentData = null) {
       try {
         const syncSetting = await client.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
         if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
-          const monRes = await client.query('SELECT first_name FROM users WHERE id = $1', [chosenMonitor]);
-          if (monRes.rows.length > 0 && isFirstSlot) {
+          const monRes = await client.query('SELECT first_name, google_calendar_id FROM users WHERE id = $1', [chosenMonitor]);
+          if (monRes.rows.length > 0 && isFirstSlot && monRes.rows[0].google_calendar_id) {
             let desc = '';
             if (contact.phone) desc += `Tel: ${contact.phone}\n`;
             if (bookingOptions) desc += `Options: ${bookingOptions}\n`;
