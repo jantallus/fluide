@@ -3,7 +3,11 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { runMigrations } = require('./migrate');
+const { initSentry, sentryErrorMiddleware } = require('./services/sentry');
 require('./services/googleSync');
+
+// ── Sentry : doit être initialisé le plus tôt possible ──────────────────────
+initSentry();
 
 const app = express();
 process.env.TZ = 'Europe/Paris';
@@ -59,6 +63,10 @@ app.use('/', require('./routes/planning'));
 app.use('/', require('./routes/giftCards'));
 app.use('/', require('./routes/admin'));
 app.use('/', require('./routes/public'));
+
+// ── Sentry : error handler — doit être APRÈS toutes les routes ───────────────
+// Capture automatiquement toutes les erreurs non gérées passées à next(err).
+app.use(sentryErrorMiddleware);
 
 // Démarrage
 const PORT = process.env.PORT || 3001;

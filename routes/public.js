@@ -93,11 +93,18 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) => {
   const { template, buyer, physicalShipping, selectedComplements } = req.body;
   try {
-    // 🛡️ SÉCURITÉ : On ne fait jamais confiance aux prix envoyés par le client.
-    // On utilise uniquement template.id pour aller chercher le vrai prix en base.
+    // ── Validation des champs obligatoires ────────────────────────────────────
     const templateId = template?.id;
     if (!templateId) return res.status(400).json({ error: 'Template ID manquant.' });
+    if (!buyer || !buyer.name || !buyer.email) {
+      return res.status(400).json({ error: 'Informations acheteur incomplètes (nom et email requis).' });
+    }
+    if (Array.isArray(selectedComplements) && selectedComplements.length > 10) {
+      return res.status(400).json({ error: 'Maximum 10 options par bon cadeau.' });
+    }
 
+    // ── Vérification du template en base (prix + statut publié) ───────────────
+    // 🛡️ On ne fait jamais confiance aux prix envoyés par le client.
     const tplRes = await pool.query(
       'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
       [templateId]
@@ -118,12 +125,13 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
       quantity: 1
     }];
 
-    // Options (compléments) — on ne fait confiance qu'aux IDs, prix relus depuis la DB
+    // Options (compléments) — seuls les IDs sont acceptés du client, prix relus en DB
     let optionsTotalCents = 0;
     let optionsText = '';
-    if (selectedComplements && selectedComplements.length > 0) {
+    if (Array.isArray(selectedComplements) && selectedComplements.length > 0) {
       const names = [];
       for (const comp of selectedComplements) {
+        if (!comp?.id) return res.status(400).json({ error: 'ID option invalide.' });
         const compRes = await pool.query(
           'SELECT name, price_cents FROM complements WHERE id = $1 AND is_active = true',
           [comp.id]
@@ -145,7 +153,14 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
       optionsText = `Options incluses : ${names.join(', ')}\n`;
     }
 
-    if (physicalShipping && physicalShipping.enabled && shipPriceCents > 0) {
+    // Envoi postal — prix lu en DB, adresse validée
+    const shippingAddress = physicalShipping?.enabled && physicalShipping?.address
+      ? String(physicalShipping.address).substring(0, 499)
+      : '';
+    if (physicalShipping?.enabled && !shippingAddress) {
+      return res.status(400).json({ error: 'Adresse postale manquante.' });
+    }
+    if (physicalShipping?.enabled && shipPriceCents > 0) {
       line_items.push({
         price_data: {
           currency: 'eur',
@@ -159,20 +174,20 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
     const sessionConfig = {
       payment_method_types: ['card'],
       customer_email: buyer.email,
-      line_items: line_items,
+      line_items,
       mode: 'payment',
       success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
       metadata: {
         purchase_type: 'gift_card',
-        buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
-        buyer_email: String(buyer.email || '').substring(0, 499),
+        buyer_name: String(buyer.name).substring(0, 499),
+        buyer_email: String(buyer.email).substring(0, 499),
         buyer_phone: String(buyer.phone || '').substring(0, 499),
         price_paid_cents: String(tpl.price_cents + optionsTotalCents),
         validity_months: String(tpl.validity_months || 12),
         flight_type_id: String(tpl.flight_type_id || ''),
         pdf_background_url: String(tpl.pdf_background_url || '').substring(0, 499),
-        buyer_address: physicalShipping?.enabled ? String(physicalShipping.address).substring(0, 499) : '',
+        buyer_address: shippingAddress,
         notes: String(optionsText).substring(0, 499),
         custom_line_1: String(tpl.custom_line_1 || '').substring(0, 80),
         custom_line_2: String(tpl.custom_line_2 || '').substring(0, 80),
@@ -382,7 +397,7 @@ router.post('/api/public/confirm-booking', confirmLimiter, async (req, res) => {
   }
 });
 
-router.get('/api/public/download-gift-card/:code', async (req, res) => {
+router.get('/api/public/download-gift-card/:code', confirmLimiter, async (req, res) => {
   const { code } = req.params;
   try {
     const voucherRes = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE UPPER(gc.code) = UPPER($1)`, [code]);
@@ -418,9 +433,9 @@ router.get('/api/public/download-gift-card/:code', async (req, res) => {
       doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_3).toUpperCase(), 30, textY + 30, { width: 535, align: 'center' });
     }
 
-    const dateV = new Date(voucher.created_at || new Date());
-    dateV.setMonth(dateV.getMonth() + 18);
-    const validUntil = dateV.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    // Utilise la date d'expiration stockée en DB (calculée par processStripeSession
+    // depuis validity_months du template) — ne jamais recalculer ici.
+    const validUntil = new Date(voucher.valid_until).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
     const dateY = codeY + 14 + (13 * 2.834);
     doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
 
