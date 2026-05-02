@@ -16,19 +16,6 @@ pool.connect((err, client, release) => {
   }
 });
 
-// 🛡️ IDEMPOTENCY : Table de suivi des sessions Stripe déjà traitées.
-// Garantit qu'un paiement ne peut jamais être traité deux fois,
-// même si le serveur redémarre ou tourne sur plusieurs instances.
-pool.query(`
-  CREATE TABLE IF NOT EXISTS stripe_payments (
-    session_id   TEXT PRIMARY KEY,
-    type         TEXT NOT NULL,
-    result_code  TEXT,
-    processed_at TIMESTAMPTZ DEFAULT NOW()
-  )
-`).catch(err => {
-  console.error('❌ Impossible de créer la table stripe_payments :', err.message);
-});
 
 pool.on('error', (err) => {
   console.error('Erreur inattendue du pool de connexion:', err.message);

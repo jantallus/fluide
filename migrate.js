@@ -87,6 +87,17 @@ const migrations = [
     name: '010_slots_drop_payment_status',
     sql: `ALTER TABLE slots DROP COLUMN IF EXISTS payment_status;`
   },
+  {
+    name: '011_stripe_payments',
+    sql: `
+      CREATE TABLE IF NOT EXISTS stripe_payments (
+        session_id   TEXT PRIMARY KEY,
+        type         TEXT NOT NULL,
+        result_code  TEXT,
+        processed_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `
+  },
 ];
 
 async function runMigrations() {

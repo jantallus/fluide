@@ -91,34 +91,53 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
 router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) => {
-  // 🎯 NOUVEAU : On récupère selectedComplements (les options)
-  const { template, buyer, physicalShipping, selectedComplements } = req.body; 
+  const { template, buyer, physicalShipping, selectedComplements } = req.body;
   try {
+    // 🛡️ SÉCURITÉ : On ne fait jamais confiance aux prix envoyés par le client.
+    // On utilise uniquement template.id pour aller chercher le vrai prix en base.
+    const templateId = template?.id;
+    if (!templateId) return res.status(400).json({ error: 'Template ID manquant.' });
+
+    const tplRes = await pool.query(
+      'SELECT * FROM gift_card_templates WHERE id = $1 AND is_published = true',
+      [templateId]
+    );
+    const tpl = tplRes.rows[0];
+    if (!tpl) return res.status(400).json({ error: 'Modèle de bon cadeau introuvable ou non publié.' });
+
     const shipRes = await pool.query("SELECT value FROM site_settings WHERE key = 'physical_gift_card_price'");
     const shipPriceCents = shipRes.rows.length > 0 ? (parseInt(shipRes.rows[0].value) || 0) * 100 : 0;
 
+    // Prix du bon cadeau — lu depuis la DB, pas depuis le client
     const line_items = [{
       price_data: {
         currency: 'eur',
-        product_data: { name: template.title, description: `Bon cadeau offert par : ${buyer.name}` },
-        unit_amount: template.price_cents
+        product_data: { name: tpl.title, description: `Bon cadeau offert par : ${buyer.name}` },
+        unit_amount: tpl.price_cents
       },
       quantity: 1
     }];
 
-    // 🎯 NOUVEAU : On ajoute les options (photos/vidéos) à la facture Stripe
+    // Options (compléments) — on ne fait confiance qu'aux IDs, prix relus depuis la DB
     let optionsTotalCents = 0;
-    let optionsText = "";
+    let optionsText = '';
     if (selectedComplements && selectedComplements.length > 0) {
       const names = [];
       for (const comp of selectedComplements) {
-        optionsTotalCents += comp.price_cents;
-        names.push(comp.name);
+        const compRes = await pool.query(
+          'SELECT name, price_cents FROM complements WHERE id = $1 AND is_active = true',
+          [comp.id]
+        );
+        const dbComp = compRes.rows[0];
+        if (!dbComp) return res.status(400).json({ error: `Option introuvable ou désactivée (id: ${comp.id})` });
+
+        optionsTotalCents += dbComp.price_cents;
+        names.push(dbComp.name);
         line_items.push({
           price_data: {
             currency: 'eur',
-            product_data: { name: `Option incluse : ${comp.name}` },
-            unit_amount: comp.price_cents
+            product_data: { name: `Option incluse : ${dbComp.name}` },
+            unit_amount: dbComp.price_cents
           },
           quantity: 1
         });
@@ -148,20 +167,19 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
         purchase_type: 'gift_card',
         buyer_name: String(buyer.name || 'Client Inconnu').substring(0, 499),
         buyer_email: String(buyer.email || '').substring(0, 499),
-        buyer_phone: String(buyer.phone || '').substring(0, 499), 
-        price_paid_cents: String((template.price_cents || 0) + optionsTotalCents).substring(0, 499),
-        validity_months: String(template.validity_months || 12).substring(0, 499),
-        flight_type_id: String(template.flight_type_id || '').substring(0, 499),
-        image_url: String(template.image_url || '').substring(0, 499),
-        pdf_background_url: String(template.pdf_background_url || '').substring(0, 499),
-        buyer_address: physicalShipping && physicalShipping.enabled ? String(physicalShipping.address).substring(0, 499) : '',
+        buyer_phone: String(buyer.phone || '').substring(0, 499),
+        price_paid_cents: String(tpl.price_cents + optionsTotalCents),
+        validity_months: String(tpl.validity_months || 12),
+        flight_type_id: String(tpl.flight_type_id || ''),
+        pdf_background_url: String(tpl.pdf_background_url || '').substring(0, 499),
+        buyer_address: physicalShipping?.enabled ? String(physicalShipping.address).substring(0, 499) : '',
         notes: String(optionsText).substring(0, 499),
-        // 🎯 NOUVEAU : On glisse les lignes de texte dans le sac à dos de Stripe
-        custom_line_1: String(template.custom_line_1 || '').substring(0, 80),
-        custom_line_2: String(template.custom_line_2 || '').substring(0, 80),
-        custom_line_3: String(template.custom_line_3 || '').substring(0, 80) // 👈 NOUVEAU
+        custom_line_1: String(tpl.custom_line_1 || '').substring(0, 80),
+        custom_line_2: String(tpl.custom_line_2 || '').substring(0, 80),
+        custom_line_3: String(tpl.custom_line_3 || '').substring(0, 80)
       }
     };
+
     const session = await stripe.checkout.sessions.create(sessionConfig);
     res.json({ url: session.url });
   } catch (err) {
@@ -172,6 +190,17 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
 
 router.post('/api/public/checkout', checkoutLimiter, async (req, res) => {
   const { contact, passengers, voucher_code } = req.body;
+
+  // Limite configurable depuis le backoffice (clé : max_passengers_per_booking, défaut : 8)
+  if (!Array.isArray(passengers) || passengers.length === 0) {
+    return res.status(400).json({ error: 'Liste de passagers invalide.' });
+  }
+  const maxPassSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'max_passengers_per_booking'");
+  const maxPassengers = maxPassSetting.rows.length > 0 ? (parseInt(maxPassSetting.rows[0].value) || 8) : 8;
+  if (passengers.length > maxPassengers) {
+    return res.status(400).json({ error: `Maximum ${maxPassengers} passagers par réservation.` });
+  }
+
   const client = await pool.connect();
 
   try {
