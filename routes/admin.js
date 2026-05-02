@@ -5,43 +5,60 @@ const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 
 router.get('/api/clients', authenticateAdmin, async (req, res) => {
+  const q      = (req.query.q || '').trim();
+  const page   = Math.max(1, parseInt(req.query.page)  || 1);
+  const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit) || 30));
+  const offset = (page - 1) * limit;
+  const search = q ? `%${q}%` : '%';
+
+  const BASE_WHERE = `
+    s.status = 'booked'
+    AND s.title IS NOT NULL
+    AND s.title != 'NOTE'
+    AND s.title NOT LIKE '☕%'
+    AND s.title NOT LIKE '%NON DISPO%'
+    AND s.title NOT LIKE '↪️ Suite%'
+    AND s.title NOT LIKE '%❌%'
+    AND LOWER(s.title) LIKE LOWER($1)
+  `;
+
   try {
-    const r = await pool.query(`
-      SELECT 
-        MAX(s.id) as id,
-        s.title as first_name,
-        '' as last_name,
-        MAX(s.email) as email,
-        MAX(s.phone) as phone,
-        MAX(CASE WHEN s.start_time >= NOW() THEN 1 ELSE 0 END) as has_upcoming,
-        json_agg(
-          json_build_object(
-            'id', s.id,
-            'start_time', s.start_time,
-            'payment_data', s.payment_data,
-            'monitor_name', COALESCE(u.first_name, 'Non assigné'),
-            'monitor_id', s.monitor_id,
-            'flight_name', COALESCE(ft.name, 'Vol personnalisé'),
-            'price_cents', COALESCE(ft.price_cents, 0)
-          ) ORDER BY 
-            CASE WHEN s.start_time >= NOW() THEN 0 ELSE 1 END ASC,
-            CASE WHEN s.start_time >= NOW() THEN s.start_time END ASC,
-            CASE WHEN s.start_time < NOW() THEN s.start_time END DESC
-        ) as flights
-      FROM slots s
-      LEFT JOIN users u ON s.monitor_id = u.id
-      LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
-      WHERE s.status = 'booked' 
-        AND s.title IS NOT NULL 
-        AND s.title != 'NOTE'
-        AND s.title NOT LIKE '☕%' 
-        AND s.title NOT LIKE '%NON DISPO%' 
-        AND s.title NOT LIKE '↪️ Suite%'
-        AND s.title NOT LIKE '%❌%'
-      GROUP BY s.title
-      ORDER BY has_upcoming DESC, MAX(s.start_time) DESC
-    `);
-    res.json(r.rows);
+    const [countRes, dataRes] = await Promise.all([
+      pool.query(`SELECT COUNT(DISTINCT s.title) AS total FROM slots s WHERE ${BASE_WHERE}`, [search]),
+      pool.query(`
+        SELECT
+          MAX(s.id)   AS id,
+          s.title     AS first_name,
+          ''          AS last_name,
+          MAX(s.email) AS email,
+          MAX(s.phone) AS phone,
+          MAX(CASE WHEN s.start_time >= NOW() THEN 1 ELSE 0 END) AS has_upcoming,
+          json_agg(
+            json_build_object(
+              'id',           s.id,
+              'start_time',   s.start_time,
+              'payment_data', s.payment_data,
+              'monitor_name', COALESCE(u.first_name, 'Non assigné'),
+              'monitor_id',   s.monitor_id,
+              'flight_name',  COALESCE(ft.name, 'Vol personnalisé'),
+              'price_cents',  COALESCE(ft.price_cents, 0)
+            ) ORDER BY
+              CASE WHEN s.start_time >= NOW() THEN 0 ELSE 1 END ASC,
+              CASE WHEN s.start_time >= NOW() THEN s.start_time END ASC,
+              CASE WHEN s.start_time <  NOW() THEN s.start_time END DESC
+          ) AS flights
+        FROM slots s
+        LEFT JOIN users       u  ON s.monitor_id    = u.id
+        LEFT JOIN flight_types ft ON s.flight_type_id = ft.id
+        WHERE ${BASE_WHERE}
+        GROUP BY s.title
+        ORDER BY has_upcoming DESC, MAX(s.start_time) DESC
+        LIMIT $2 OFFSET $3
+      `, [search, limit, offset]),
+    ]);
+
+    const total = parseInt(countRes.rows[0].total);
+    res.json({ clients: dataRes.rows, total, page, totalPages: Math.ceil(total / limit) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
