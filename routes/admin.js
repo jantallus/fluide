@@ -32,16 +32,20 @@ router.get('/api/clients', authenticateAdmin, async (req, res) => {
           ''          AS last_name,
           MAX(s.email) AS email,
           MAX(s.phone) AS phone,
+          MAX(s.billing_name)  AS billing_name,
+          MAX(s.billing_email) AS billing_email,
           MAX(CASE WHEN s.start_time >= NOW() THEN 1 ELSE 0 END) AS has_upcoming,
           json_agg(
             json_build_object(
-              'id',           s.id,
-              'start_time',   s.start_time,
-              'payment_data', s.payment_data,
-              'monitor_name', COALESCE(u.first_name, 'Non assigné'),
-              'monitor_id',   s.monitor_id,
-              'flight_name',  COALESCE(ft.name, 'Vol personnalisé'),
-              'price_cents',  COALESCE(ft.price_cents, 0)
+              'id',            s.id,
+              'start_time',    s.start_time,
+              'payment_data',  s.payment_data,
+              'monitor_name',  COALESCE(u.first_name, 'Non assigné'),
+              'monitor_id',    s.monitor_id,
+              'flight_name',   COALESCE(ft.name, 'Vol personnalisé'),
+              'price_cents',   COALESCE(ft.price_cents, 0),
+              'billing_name',  s.billing_name,
+              'group_id',      s.group_id
             ) ORDER BY
               CASE WHEN s.start_time >= NOW() THEN 0 ELSE 1 END ASC,
               CASE WHEN s.start_time >= NOW() THEN s.start_time END ASC,

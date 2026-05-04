@@ -175,7 +175,7 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
 });
 
 router.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
-  const { payment_data, monitor_id } = req.body;
+  const { payment_data, monitor_id, billing_name } = req.body;
   const client = await pool.connect();
 
   try {
@@ -186,6 +186,15 @@ router.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
 
     if (payment_data !== undefined) {
       await client.query('UPDATE slots SET payment_data = $1 WHERE id = $2', [payment_data ? JSON.stringify(payment_data) : null, req.params.id]);
+    }
+
+    if (billing_name !== undefined) {
+      // Propage à tous les slots du même group_id si possible
+      if (currentSlot.group_id) {
+        await client.query('UPDATE slots SET billing_name = $1 WHERE group_id = $2', [billing_name || null, currentSlot.group_id]);
+      } else {
+        await client.query('UPDATE slots SET billing_name = $1 WHERE id = $2', [billing_name || null, req.params.id]);
+      }
     }
 
     if (monitor_id !== undefined) {

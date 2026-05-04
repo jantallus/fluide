@@ -2,6 +2,7 @@
 // Logique partagée entre la route confirm-booking (redirect) et le webhook Stripe.
 // Les deux chemins doivent produire exactement le même résultat pour une session donnée.
 
+const { randomUUID } = require('crypto');
 const { pool } = require('../db');
 const { performBooking } = require('./booking');
 const { generatePDFBuffer } = require('./pdf');
@@ -124,6 +125,13 @@ async function processStripeSession(session) {
       notes: session.metadata.contact_notes || '',
     };
 
+    // Infos de facturation (nom Stripe ou nom contact)
+    const billingInfo = {
+      billing_name: session.customer_details?.name || session.metadata.contact_name || null,
+      billing_email: session.customer_details?.email || session.metadata.contact_email || null,
+      group_id: randomUUID(),
+    };
+
     // Recompose le JSON passagers depuis les chunks (500 chars / chunk)
     let passengersJson = '';
     let chunkIndex = 0;
@@ -146,7 +154,7 @@ async function processStripeSession(session) {
         : {}),
     };
 
-    await performBooking(client, contact, passengers, pData);
+    await performBooking(client, contact, passengers, pData, billingInfo);
 
     if (voucherCode) {
       await client.query(

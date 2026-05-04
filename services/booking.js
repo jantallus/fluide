@@ -1,6 +1,10 @@
 const { notifyGoogleCalendar } = require('./email');
 
-async function performBooking(client, contact, passengers, paymentData = null) {
+async function performBooking(client, contact, passengers, paymentData = null, billingInfo = null) {
+  const groupId = billingInfo?.group_id || null;
+  const billingName = billingInfo?.billing_name || null;
+  const billingEmail = billingInfo?.billing_email || null;
+
   for (const p of passengers) {
     const flightRes = await client.query('SELECT * FROM flight_types WHERE id = $1', [p.flightId]);
     const flight = flightRes.rows[0];
@@ -66,9 +70,10 @@ async function performBooking(client, contact, passengers, paymentData = null) {
 
       await client.query(`
         UPDATE slots
-        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7, payment_data = $9
+        SET status = 'booked', title = $1, notes = $8, phone = $3, email = $4, weight_checked = true, flight_type_id = $5, booking_options = $6, client_message = $7, payment_data = $9,
+            billing_name = $10, billing_email = $11, group_id = $12
         WHERE id = $2
-      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentData ? JSON.stringify(paymentData) : null]);
+      `, [slotTitle, slot.id, contact.phone, contact.email, p.flightId, bookingOptions, clientMessage, slotNotes, paymentData ? JSON.stringify(paymentData) : null, billingName, billingEmail, groupId]);
 
       try {
         const syncSetting = await client.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
