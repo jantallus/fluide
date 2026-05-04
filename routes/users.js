@@ -9,7 +9,7 @@ router.get('/api/users', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT id, first_name, email, role, is_active_monitor, status FROM users ORDER BY first_name ASC');
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/users', authenticateAdmin, async (req, res) => {
@@ -22,7 +22,7 @@ router.post('/api/users', authenticateAdmin, async (req, res) => {
       [first_name, email, hash, role, is_active_monitor, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.patch('/api/users/:id', authenticateUser, async (req, res) => {
@@ -60,7 +60,7 @@ router.patch('/api/users/:id', authenticateUser, async (req, res) => {
        );
     }
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
@@ -68,14 +68,14 @@ router.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
     if (req.user && req.user.id === req.params.id) return res.status(400).json({ error: "Interdit de supprimer son propre compte." });
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
   try {
     const r = await pool.query('SELECT *, TO_CHAR(start_date, \'YYYY-MM-DD\') as start_date, TO_CHAR(end_date, \'YYYY-MM-DD\') as end_date FROM monitor_availabilities WHERE user_id = $1 ORDER BY start_date ASC', [req.params.id]);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
@@ -117,7 +117,7 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
     
     const r = await pool.query(query, params);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/monitors', async (req, res) => {
@@ -128,7 +128,7 @@ router.get('/api/monitors', async (req, res) => {
       ORDER BY first_name ASC
     `);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 

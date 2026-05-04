@@ -76,7 +76,7 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
     }
 
     res.json(slots);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/public/site-settings', async (req, res) => {
@@ -84,7 +84,7 @@ router.get('/api/public/site-settings', async (req, res) => {
     const r = await pool.query("SELECT key, value FROM site_settings WHERE key IN ('physical_gift_card_enabled', 'physical_gift_card_price')");
     const settings = r.rows.reduce((acc, curr) => ({ ...acc, [curr.key]: curr.value }), {});
     res.json(settings);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -199,7 +199,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
     res.json({ url: session.url });
   } catch (err) {
     console.error("Erreur Checkout Stripe Cadeau:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
@@ -393,7 +393,7 @@ router.post('/api/public/confirm-booking', confirmLimiter, async (req, res) => {
   } catch (err) {
     activeCheckoutSessions.delete(session_id);
     console.error("❌ ERREUR CRITIQUE CONFIRMATION:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 

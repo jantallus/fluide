@@ -8,7 +8,7 @@ router.get('/api/flight-types', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM flight_types ORDER BY price_cents ASC');
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/flight-types', authenticateAdmin, async (req, res) => {
@@ -25,7 +25,7 @@ router.post('/api/flight-types', authenticateAdmin, async (req, res) => {
       [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
@@ -43,7 +43,7 @@ router.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
       [name, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
  
 router.delete('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
@@ -59,7 +59,7 @@ router.get('/api/complements', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM complements WHERE is_active = true ORDER BY price_cents ASC');
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/complements', authenticateAdmin, async (req, res) => {
@@ -70,14 +70,14 @@ router.post('/api/complements', authenticateAdmin, async (req, res) => {
       [name, description, price_cents, image_url || null]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/api/complements/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM complements WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 

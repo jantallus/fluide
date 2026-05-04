@@ -179,7 +179,8 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
 
 // 🎯 FONCTION POUR ENVOYER LE VOL À GOOGLE SCRIPT
 async function notifyGoogleCalendar(monitorName, title, startTime, endTime, description) {
-  const webhookUrl = process.env.GOOGLE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec";
+  const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
+  if (!webhookUrl) return;
   
   try {
     const response = await fetch(webhookUrl, {

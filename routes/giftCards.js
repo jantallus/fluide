@@ -21,7 +21,7 @@ router.get('/api/gift-card-templates', async (req, res) => {
     else query += ` ORDER BY gct.id DESC`;
     const r = await pool.query(query);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
@@ -45,7 +45,7 @@ router.post('/api/gift-card-templates', authenticateAdmin, async (req, res) => {
       ]
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) => {
@@ -71,8 +71,8 @@ router.put('/api/gift-card-templates/:id', authenticateAdmin, async (req, res) =
       ]
     );
     res.json({ success: true });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
+  } catch (err) {
+    console.error(err); res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
@@ -80,7 +80,7 @@ router.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res
   try {
     await pool.query('DELETE FROM gift_card_templates WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 
@@ -88,7 +88,7 @@ router.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id ORDER BY gc.created_at DESC`);
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 // 🎯 1. CRÉATION D'UN CODE
@@ -105,7 +105,7 @@ router.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
     res.json(r.rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(400).json({ error: "Ce code personnalisé existe déjà." });
-    res.status(500).json({ error: err.message });
+    console.error(err); res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
@@ -118,21 +118,21 @@ router.put('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
       [flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, partner_billing_type || 'fixed', req.params.id]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.patch('/api/gift-cards/:id/status', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(`UPDATE gift_cards SET status = $1 WHERE id = $2`, [req.body.status, req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(`DELETE FROM gift_cards WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/gift-cards/check/:code', giftCardLimiter, async (req, res) => {
@@ -140,7 +140,7 @@ router.get('/api/gift-cards/check/:code', giftCardLimiter, async (req, res) => {
     const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE UPPER(gc.code) = UPPER($1) AND gc.status = 'valid'`, [req.params.code]);
     if (r.rows.length === 0) return res.status(404).json({ message: "Bon invalide ou déjà utilisé" });
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 

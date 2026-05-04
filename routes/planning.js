@@ -57,7 +57,8 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
 
     if (isGoogleSyncEnabled) {
       // 🎯 SYNC GOOGLE : Version ultra-rapide avec Cache
-      const webhookUrl = process.env.GOOGLE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwRlzxV3bb1vIAnDiY0qz4YJGzPDwHu9qoABxaf5Q89lljHpf7rCP9hclWdoFF44L2j/exec";
+      const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
+      if (!webhookUrl) { res.json(slots); return; }
       const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(id => id != null))];
       
       await Promise.all(monitorIds.map(async (mId) => {
@@ -170,7 +171,7 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
 
   } catch (err) {
     console.error("ERREUR PATCH SLOT:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 
@@ -335,7 +336,7 @@ router.get('/api/slot-definitions', async (req, res) => {
     const query = plan ? 'SELECT * FROM slot_definitions WHERE plan_name = $1 ORDER BY start_time' : 'SELECT * FROM slot_definitions ORDER BY start_time';
     const result = await pool.query(query, plan ? [plan] : []);
     res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
@@ -346,7 +347,7 @@ router.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
       [start_time, duration_minutes, label, plan_name || 'Standard']
     );
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
@@ -354,28 +355,28 @@ router.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3, plan_name = $4 WHERE id = $5', [start_time, duration_minutes, label, plan_name || 'Standard', req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/plans/:oldName', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('UPDATE slot_definitions SET plan_name = $1 WHERE plan_name = $2', [req.body.newName, req.params.oldName]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM slot_definitions WHERE plan_name = $1', [req.params.name]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 
@@ -395,7 +396,7 @@ router.delete('/api/slots/:id', authenticateUser, async (req, res) => {
       `UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL WHERE id = $1`, [req.params.id]
     );
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 

@@ -63,7 +63,7 @@ router.get('/api/clients', authenticateAdmin, async (req, res) => {
 
     const total = parseInt(countRes.rows[0].total);
     res.json({ clients: dataRes.rows, total, page, totalPages: Math.ceil(total / limit) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 
@@ -73,14 +73,14 @@ router.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
     const summary = await pool.query(`SELECT COUNT(*) as total_slots, COUNT(*) FILTER (WHERE status = 'booked' AND (title NOT LIKE '☕%' OR title IS NULL)) as booked_slots, COALESCE(SUM(ft.price_cents), 0) as revenue FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id WHERE s.start_time::date = $1`, [today]);
     const upcoming = await pool.query(`SELECT s.id, s.start_time, s.title, ft.name as flight_name, u.first_name as monitor_name, s.notes FROM slots s LEFT JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id WHERE s.start_time::date = $1 AND s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL) AND s.start_time >= (NOW() AT TIME ZONE 'Europe/Paris') ORDER BY s.start_time ASC LIMIT 5`, [today]);
     res.json({ summary: { todaySlots: parseInt(summary.rows[0].total_slots) || 0, bookedSlots: parseInt(summary.rows[0].booked_slots) || 0, revenue: parseInt(summary.rows[0].revenue) || 0 }, upcoming: upcoming.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/settings', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT key, value FROM site_settings');
     res.json(r.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/settings', authenticateAdmin, async (req, res) => {
@@ -88,7 +88,7 @@ router.post('/api/settings', authenticateAdmin, async (req, res) => {
   try {
     await pool.query(`INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, value]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.get('/api/stats', authenticateAdmin, async (req, res) => {
@@ -96,7 +96,7 @@ router.get('/api/stats', authenticateAdmin, async (req, res) => {
     const summaryResult = await pool.query(`SELECT COALESCE(SUM(ft.price_cents), 0) as total_revenue, COUNT(s.id) as total_bookings FROM slots s JOIN flight_types ft ON s.flight_type_id = ft.id WHERE s.status = 'booked' AND (s.title NOT LIKE '☕%' OR s.title IS NULL)`);
     const upcomingResult = await pool.query(`SELECT s.id, s.start_time, s.title as client_name, ft.name as flight_name, ft.price_cents as total_price, u.first_name as monitor_name FROM slots s JOIN flight_types ft ON s.flight_type_id = ft.id LEFT JOIN users u ON s.monitor_id = u.id WHERE s.status = 'booked' AND s.start_time >= NOW() ORDER BY s.start_time ASC`);
     res.json({ summary: { totalRevenue: parseInt(summaryResult.rows[0].total_revenue), totalBookings: parseInt(summaryResult.rows[0].total_bookings) }, upcoming: upcomingResult.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 // ⚡ ROUTE PUBLIQUE VITESSE LUMIÈRE (100% SQL + Mémoire RAM)
@@ -122,7 +122,7 @@ router.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
 
     await pool.query(`UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, phone = NULL, email = NULL, notes = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight = NULL WHERE id = ANY($1::int[])`, [ids]);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 // ==========================================
