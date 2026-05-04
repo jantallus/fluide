@@ -176,8 +176,8 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
       customer_email: buyer.email,
       line_items,
       mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux`,
+      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}&embed=true`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bons-cadeaux?embed=true`,
       metadata: {
         purchase_type: 'gift_card',
         buyer_name: String(buyer.name).substring(0, 499),
@@ -297,7 +297,7 @@ router.post('/api/public/checkout', checkoutLimiter, async (req, res) => {
         await sendConfirmationSMS(contact.phone, contact.firstName, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
         await sendAdminNotificationEmail(`${contact.firstName} ${contact.lastName}`, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
       }
-      return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}` });
+      return res.json({ url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id=GRATUIT_${Date.now()}&embed=true` });
     }
 
     const passengersJson = JSON.stringify(passengers);
@@ -321,8 +321,8 @@ router.post('/api/public/checkout', checkoutLimiter, async (req, res) => {
       customer_email: contact.email,
       line_items: line_items,
       mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking`,
+      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/succes?session_id={CHECKOUT_SESSION_ID}&embed=true`,
+      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking?embed=true`,
       metadata: metadata 
     };
 
