@@ -4,6 +4,8 @@ const bcrypt = require('bcrypt');
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { CreateUserSchema, UpdateUserSchema } = require('../schemas');
 
 router.get('/api/users', authenticateAdmin, async (req, res) => {
   try {
@@ -12,7 +14,7 @@ router.get('/api/users', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/users', authenticateAdmin, async (req, res) => {
+router.post('/api/users', authenticateAdmin, validate(CreateUserSchema), async (req, res) => {
   const { first_name, email, password, role, is_active_monitor, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
@@ -25,7 +27,7 @@ router.post('/api/users', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.patch('/api/users/:id', authenticateUser, async (req, res) => {
+router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), async (req, res) => {
   const { first_name, email, role, is_active_monitor, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     if (req.user.role !== 'admin' && req.user.id !== parseInt(req.params.id)) {

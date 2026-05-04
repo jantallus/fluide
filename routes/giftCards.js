@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { CreateGiftCardSchema } = require('../schemas');
 const rateLimit = require('express-rate-limit');
 const { generatePDFBuffer } = require('../services/pdf');
 const { sendConfirmationEmail } = require('../services/email');
@@ -93,7 +95,7 @@ router.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
 
 // 🎯 1. CRÉATION D'UN CODE
 // 🎯 1. CRÉATION D'UN CODE
-router.post('/api/gift-cards', authenticateAdmin, async (req, res) => {
+router.post('/api/gift-cards', authenticateAdmin, validate(CreateGiftCardSchema), async (req, res) => {
   const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, custom_code, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents, partner_billing_type } = req.body;
   try {
     const finalCode = custom_code ? custom_code.toUpperCase().replace(/\s+/g, '-') : `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;

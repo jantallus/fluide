@@ -4,6 +4,8 @@ const rateLimit = require('express-rate-limit');
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { CheckoutSchema, CheckoutGiftCardSchema } = require('../schemas');
 const Stripe = require('stripe');
 const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail } = require('../services/email');
 const { generatePDFBuffer, drawBackground } = require('../services/pdf');
@@ -90,7 +92,7 @@ router.get('/api/public/site-settings', async (req, res) => {
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 /// 🎯 SECURISE : CREATION SESSION STRIPE BON CADEAU
-router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) => {
+router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(CheckoutGiftCardSchema), async (req, res) => {
   const { template, buyer, physicalShipping, selectedComplements } = req.body;
   try {
     // ── Validation des champs obligatoires ────────────────────────────────────
@@ -203,7 +205,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, async (req, res) 
   }
 });
 
-router.post('/api/public/checkout', checkoutLimiter, async (req, res) => {
+router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), async (req, res) => {
   const { contact, passengers, voucher_code } = req.body;
 
   // Limite configurable depuis le backoffice (clé : max_passengers_per_booking, défaut : 8)

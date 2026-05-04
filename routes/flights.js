@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { FlightTypeSchema } = require('../schemas');
 
 router.get('/api/flight-types', async (req, res) => {
   try {
@@ -11,7 +13,7 @@ router.get('/api/flight-types', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/flight-types', authenticateAdmin, async (req, res) => {
+router.post('/api/flight-types', authenticateAdmin, validate(FlightTypeSchema), async (req, res) => {
   const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
@@ -28,7 +30,7 @@ router.post('/api/flight-types', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.put('/api/flight-types/:id', authenticateAdmin, async (req, res) => {
+router.put('/api/flight-types/:id', authenticateAdmin, validate(FlightTypeSchema), async (req, res) => {
   const { name, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;

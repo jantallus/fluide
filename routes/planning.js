@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { QuickPatchSchema } = require('../schemas');
 const { googleSyncCache } = require('../services/googleSync');
 const { notifyGoogleCalendar } = require('../services/email');
 
@@ -175,7 +177,7 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
   }
 });
 
-router.patch('/api/slots/:id/quick', authenticateUser, async (req, res) => {
+router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema), async (req, res) => {
   const { payment_data, monitor_id, billing_name } = req.body;
   const client = await pool.connect();
 
