@@ -150,8 +150,8 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
         const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
         if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
           
-          const monRes = await pool.query('SELECT first_name, google_calendar_id FROM users WHERE id = $1', [updatedSlot.monitor_id]);
-          if (monRes.rows.length > 0 && monRes.rows[0].google_calendar_id) {
+          const monRes = await pool.query('SELECT first_name FROM users WHERE id = $1', [updatedSlot.monitor_id]);
+          if (monRes.rows.length > 0) {
             const monitorName = monRes.rows[0].first_name;
 
             let desc = "Créé depuis le backoffice\n";
