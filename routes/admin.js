@@ -72,7 +72,7 @@ router.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/api/settings', async (req, res) => {
+router.get('/api/settings', authenticateAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT key, value FROM site_settings');
     res.json(r.rows);
