@@ -20,7 +20,7 @@ const zName  = z.string().min(1, 'Champ requis').max(100).trim();
 
 const PassengerSchema = z.object({
   firstName:            zName,
-  flightId:             z.number().int().positive(),
+  flightId:             z.coerce.number().int().positive(), // le frontend envoie parfois une string (clé de panier)
   flightName:           z.string().max(200).optional(),
   date:                 zDate,
   time:                 zTime,
@@ -37,7 +37,7 @@ const CheckoutSchema = z.object({
     notes:      z.string().max(500).optional().default(''),
   }),
   passengers:   z.array(PassengerSchema).min(1, 'Au moins un passager requis').max(10),
-  voucher_code: z.string().max(50).trim().optional(),
+  voucher_code: z.string().max(50).trim().nullish(), // null envoyé par le frontend quand aucun bon appliqué
 });
 
 
