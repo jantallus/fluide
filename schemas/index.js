@@ -55,7 +55,7 @@ const CheckoutGiftCardSchema = z.object({
   physicalShipping: z.object({
     enabled: z.boolean(),
     address: z.string().max(500).optional(),
-  }).optional(),
+  }).nullish(), // le frontend envoie null quand la livraison physique n'est pas souhaitée
   selectedComplements: z.array(z.object({
     id: z.number().int().positive(),
   })).max(10).optional(),
