@@ -83,7 +83,7 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
 
 router.get('/api/public/site-settings', async (req, res) => {
   try {
-    const r = await pool.query("SELECT key, value FROM site_settings WHERE key IN ('physical_gift_card_enabled', 'physical_gift_card_price')");
+    const r = await pool.query("SELECT key, value FROM site_settings WHERE key IN ('physical_gift_card_enabled', 'physical_gift_card_price', 'display_days_count')");
     const settings = r.rows.reduce((acc, curr) => ({ ...acc, [curr.key]: curr.value }), {});
     res.json(settings);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

@@ -9,8 +9,6 @@ const extractToken = (req) => {
 
 const authenticateUser = (req, res, next) => {
   const token = extractToken(req);
-  console.log('Token reçu:', !!token);
-  console.log('JWT_SECRET défini:', !!JWT_SECRET);
   if (!token) return res.status(401).json({ error: 'Accès refusé' });
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Session invalide' });
@@ -21,8 +19,6 @@ const authenticateUser = (req, res, next) => {
 
 const authenticateAdmin = (req, res, next) => {
   const token = extractToken(req);
-  console.log('Token reçu:', !!token);
-  console.log('JWT_SECRET défini:', !!JWT_SECRET);
   if (!token) return res.status(401).json({ error: 'Accès refusé' });
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Session invalide' });

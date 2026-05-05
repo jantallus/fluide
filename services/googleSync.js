@@ -37,8 +37,14 @@ async function runBackgroundGoogleSync() {
 }
 
 // ⏱️ Le serveur refait le point toutes les 2 minutes (120 000 millisecondes)
-setInterval(runBackgroundGoogleSync, 120000);
+let syncInterval = setInterval(runBackgroundGoogleSync, 120000);
 // 🚀 On lance un premier check 5 secondes après le démarrage du serveur
-setTimeout(runBackgroundGoogleSync, 5000);
+let syncTimeout = setTimeout(runBackgroundGoogleSync, 5000);
 
-module.exports = { googleSyncCache };
+/** Arrête proprement les timers (appelé lors du graceful shutdown). */
+function stopSync() {
+  clearInterval(syncInterval);
+  clearTimeout(syncTimeout);
+}
+
+module.exports = { googleSyncCache, stopSync };
