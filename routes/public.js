@@ -8,8 +8,7 @@ const { validate } = require('../middleware/validate');
 const { CheckoutSchema, CheckoutGiftCardSchema } = require('../schemas');
 const Stripe = require('stripe');
 const { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail } = require('../services/email');
-const { generatePDFBuffer, drawBackground } = require('../services/pdf');
-const PDFDocument = require('pdfkit');
+const { generatePDFBuffer } = require('../services/pdf');
 const { googleSyncCache } = require('../services/googleSync');
 const { performBooking } = require('../services/booking');
 const { processStripeSession } = require('../services/stripeProcessor');
@@ -405,45 +404,10 @@ router.get('/api/public/download-gift-card/:code', confirmLimiter, async (req, r
     const voucherRes = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id WHERE UPPER(gc.code) = UPPER($1)`, [code]);
     if (voucherRes.rows.length === 0) return res.status(404).send("Bon cadeau introuvable.");
 
-    const voucher = voucherRes.rows[0];
-    const doc = new PDFDocument({ size: 'A4', margin: 0 });
-    
+    const pdfBuffer = await generatePDFBuffer(voucherRes.rows[0]);
     res.setHeader('Content-Type', 'application/pdf');
-    // 🎯 LA CORRECTION EST ICI : Ajout des guillemets (") autour du filename !
-    res.setHeader('Content-Disposition', `attachment; filename="Bon_Cadeau_${voucher.code}.pdf"`);
-    doc.pipe(res);
-
-    const backgroundSrc = voucher.pdf_background_url || 'cadeau-background.jpg';
-    await drawBackground(doc, backgroundSrc);
-
-    // Positionnement et sécurisation des textes avec String()
-    const buyerY = 184 * 2.834;
-    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text(String(voucher.buyer_name || '').toUpperCase(), 0, buyerY, { align: 'center', width: 595 });
-    
-    const codeX = 90 * 2.834;
-    const codeY = 217 * 2.834; 
-    doc.fillColor('#f026b8').font('Helvetica-Bold').fontSize(14).text(String(voucher.code), codeX, codeY, { characterSpacing: 2 });
-
-    const textY = 264 * 2.834; 
-    if (voucher.custom_line_1) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_1).toUpperCase(), 30, textY, { width: 535, align: 'center' });
-    }
-    if (voucher.custom_line_2) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_2).toUpperCase(), 30, textY + 15, { width: 535, align: 'center' });
-    }
-    if (voucher.custom_line_3) {
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text(String(voucher.custom_line_3).toUpperCase(), 30, textY + 30, { width: 535, align: 'center' });
-    }
-
-    // Utilise la date d'expiration stockée en DB (calculée par processStripeSession
-    // depuis validity_months du template) — ne jamais recalculer ici.
-    const validUntil = new Date(voucher.valid_until).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-    const dateY = codeY + 14 + (13 * 2.834);
-    doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
-
-    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluide-parapente.fr', 0, 815, { align: 'center', width: 595 });
-
-    doc.end();
+    res.setHeader('Content-Disposition', `attachment; filename="Bon_Cadeau_${voucherRes.rows[0].code}.pdf"`);
+    res.send(pdfBuffer);
   } catch (err) {
     console.error("Erreur génération PDF:", err);
     if (!res.headersSent) res.status(500).send("Erreur lors de la génération du bon cadeau.");
