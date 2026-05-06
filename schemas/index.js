@@ -15,6 +15,10 @@ const zTime  = z.string().regex(timeRegex,  'Heure invalide (format attendu : HH
 const zEmail = z.string().email('Email invalide').max(200);
 const zName  = z.string().min(1, 'Champ requis').max(100).trim();
 
+// Accepte une date/heure valide, une chaîne vide ou null — coerce '' en null
+const zDateOpt = z.union([zDate, z.literal(''), z.null()]).optional().transform(v => v || null);
+const zTimeOpt = z.union([zTime, z.literal(''), z.null()]).optional().transform(v => v || null);
+
 
 // ── PUBLIC : Réservation de vol ───────────────────────────────────────────────
 
@@ -71,10 +75,10 @@ const CreateUserSchema = z.object({
   role:                 z.enum(['admin', 'monitor', 'permanent']),
   is_active_monitor:    z.boolean().optional().default(false),
   google_sync_enabled:  z.boolean().optional().default(false),
-  available_start_date: zDate.optional().nullable(),
-  available_end_date:   zDate.optional().nullable(),
-  daily_start_time:     zTime.optional().nullable(),
-  daily_end_time:       zTime.optional().nullable(),
+  available_start_date: zDateOpt,
+  available_end_date:   zDateOpt,
+  daily_start_time:     zTimeOpt,
+  daily_end_time:       zTimeOpt,
 });
 
 const UpdateUserSchema = z.object({
@@ -85,10 +89,10 @@ const UpdateUserSchema = z.object({
   is_active_monitor:    z.boolean().optional(),
   google_sync_enabled:  z.boolean().optional(),
   status:               z.enum(['Actif', 'Inactif']).optional(),
-  available_start_date: zDate.optional().nullable(),
-  available_end_date:   zDate.optional().nullable(),
-  daily_start_time:     zTime.optional().nullable(),
-  daily_end_time:       zTime.optional().nullable(),
+  available_start_date: zDateOpt,
+  available_end_date:   zDateOpt,
+  daily_start_time:     zTimeOpt,
+  daily_end_time:       zTimeOpt,
 });
 
 
