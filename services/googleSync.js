@@ -15,7 +15,7 @@ async function runBackgroundGoogleSync() {
     }
 
     // On récupère uniquement les moniteurs actifs
-    const monRes = await pool.query("SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif'");
+    const monRes = await pool.query("SELECT id, first_name FROM users WHERE is_active_monitor = true AND status = 'Actif' AND google_sync_enabled = true");
     const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
     if (!webhookUrl) { isSyncing = false; return; }
 

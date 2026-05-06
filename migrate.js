@@ -98,6 +98,10 @@ const migrations = [
       );
     `
   },
+  {
+    name: '012_users_google_sync_enabled',
+    sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sync_enabled BOOLEAN NOT NULL DEFAULT false;`
+  },
 ];
 
 async function runMigrations() {
