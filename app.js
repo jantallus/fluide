@@ -10,6 +10,9 @@ initSentry();
 
 const app = express();
 
+// Railway (et tout reverse proxy) envoie X-Forwarded-For — on lui fait confiance
+app.set('trust proxy', 1);
+
 app.use(cors({
   origin: function (origin, callback) {
     const allowedOrigins = [
