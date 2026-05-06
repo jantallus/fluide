@@ -441,7 +441,7 @@ router.get('/api/public/download-gift-card/:code', confirmLimiter, async (req, r
     const dateY = codeY + 14 + (13 * 2.834);
     doc.fillColor('#64748b').font('Helvetica-Bold').fontSize(8).text(`VALABLE JUSQU'AU : ${validUntil.toUpperCase()}`, 0, dateY, { align: 'center', width: 595 });
 
-    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluideparapente.com', 0, 815, { align: 'center', width: 595 });
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8').text('Fluide Parapente - La Clusaz | www.fluide-parapente.fr', 0, 815, { align: 'center', width: 595 });
 
     doc.end();
   } catch (err) {
