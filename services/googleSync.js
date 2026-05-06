@@ -21,14 +21,23 @@ async function runBackgroundGoogleSync() {
 
     // Le serveur va toquer chez Google silencieusement
     for (const mon of monRes.rows) {
-  try {
-    const resp = await fetch(`${webhookUrl}?monitorName=${mon.first_name}`);
-    const slots = await resp.json();
-    googleSyncCache.set(mon.id, slots); 
-  } catch(e) { 
-    console.error("Erreur sync Google pour", mon.first_name, ":", e.message);
-  }
-}
+      try {
+        const resp = await fetch(`${webhookUrl}?monitorName=${encodeURIComponent(mon.first_name)}`);
+        if (!resp.ok) {
+          console.warn(`Sync Google ${mon.first_name} : HTTP ${resp.status}`);
+          continue;
+        }
+        const contentType = resp.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          console.warn(`Sync Google ${mon.first_name} : réponse non-JSON (${contentType}) — vérifier le déploiement du Apps Script`);
+          continue;
+        }
+        const slots = await resp.json();
+        googleSyncCache.set(mon.id, slots);
+      } catch(e) {
+        console.error("Erreur sync Google pour", mon.first_name, ":", e.message);
+      }
+    }
   } catch(e) {
     console.error("Erreur Background Sync:", e);
   } finally {
