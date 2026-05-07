@@ -106,6 +106,14 @@ const migrations = [
     name: '013_flight_types_description',
     sql: `ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS description TEXT;`
   },
+  {
+    name: '014_flight_types_activities',
+    sql: `
+      ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS activity_ski BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS activity_snowboard BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS activity_pedestrian BOOLEAN NOT NULL DEFAULT false;
+    `
+  },
 ];
 
 async function runMigrations() {

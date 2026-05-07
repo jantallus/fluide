@@ -101,6 +101,9 @@ const UpdateUserSchema = z.object({
 const FlightTypeSchema = z.object({
   name:                   z.string().min(1).max(100),
   description:            z.string().max(1000).optional().nullable(),
+  activity_ski:           z.boolean().optional().default(false),
+  activity_snowboard:     z.boolean().optional().default(false),
+  activity_pedestrian:    z.boolean().optional().default(false),
   duration_minutes:       z.number().int().min(1).max(480),
   price_cents:            z.number().int().min(0).max(1000000),
   restricted_start_time:  zTime.optional().nullable().or(z.literal('')),
