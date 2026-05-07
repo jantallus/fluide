@@ -14,7 +14,7 @@ router.get('/api/flight-types', async (req, res) => {
 });
 
 router.post('/api/flight-types', authenticateAdmin, validate(FlightTypeSchema), async (req, res) => {
-  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
+  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -22,16 +22,16 @@ router.post('/api/flight-types', authenticateAdmin, validate(FlightTypeSchema), 
 
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, description, activity_ski, activity_snowboard, activity_pedestrian, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
-      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false]
+      `INSERT INTO flight_types (name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
+      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false]
     );
     res.json(r.rows[0]);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/flight-types/:id', authenticateAdmin, validate(FlightTypeSchema), async (req, res) => {
-  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
+  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -40,9 +40,9 @@ router.put('/api/flight-types/:id', authenticateAdmin, validate(FlightTypeSchema
   try {
     await pool.query(
       `UPDATE flight_types
-       SET name = $1, description = $2, activity_ski = $3, activity_snowboard = $4, activity_pedestrian = $5, duration_minutes = $6, price_cents = $7, restricted_start_time = $8, restricted_end_time = $9, color_code = $10, allowed_time_slots = $11, season = $12, allow_multi_slots = $13, weight_min = $14, weight_max = $15, booking_delay_hours = $16, image_url = $17, popup_content = $18, show_popup = $19
-       WHERE id = $20`,
-      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id]
+       SET name = $1, description = $2, activity_ski = $3, activity_snowboard = $4, activity_pedestrian = $5, activity_children = $6, duration_minutes = $7, price_cents = $8, restricted_start_time = $9, restricted_end_time = $10, color_code = $11, allowed_time_slots = $12, season = $13, allow_multi_slots = $14, weight_min = $15, weight_max = $16, booking_delay_hours = $17, image_url = $18, popup_content = $19, show_popup = $20
+       WHERE id = $21`,
+      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

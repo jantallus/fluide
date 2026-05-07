@@ -104,6 +104,7 @@ const FlightTypeSchema = z.object({
   activity_ski:           z.boolean().optional().default(false),
   activity_snowboard:     z.boolean().optional().default(false),
   activity_pedestrian:    z.boolean().optional().default(false),
+  activity_children:      z.boolean().optional().default(false),
   duration_minutes:       z.number().int().min(1).max(480),
   price_cents:            z.number().int().min(0).max(1000000),
   restricted_start_time:  zTime.optional().nullable().or(z.literal('')),
