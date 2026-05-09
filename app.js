@@ -18,14 +18,15 @@ app.use(cors({
     const allowedOrigins = [
       'http://localhost:3000',
       'http://127.0.0.1:3000',
-      process.env.TAILSCALE_URL || null,
+      process.env.TAILSCALE_URL,
       'https://fluide-frontend-production.up.railway.app',
       process.env.FRONTEND_URL,
-      process.env.WORDPRESS_URL || null,
-    ];
+      process.env.WORDPRESS_URL,
+    ].filter(Boolean); // élimine les undefined/null quand une variable d'env n'est pas définie
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.warn(`[CORS] Origine refusée : "${origin}" — ajoutez-la à FRONTEND_URL ou WORDPRESS_URL si c'est légitime.`);
       callback(new Error('Accès CORS non autorisé'));
     }
   },
