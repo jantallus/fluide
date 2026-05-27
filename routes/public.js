@@ -55,15 +55,43 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
     const r = await pool.query(`SELECT id, start_time, end_time, status, monitor_id FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ORDER BY start_time ASC`, [start, end]);
     let slots = r.rows;
 
+    // 2. Disponibilités moniteurs : si un moniteur a des périodes définies,
+    //    tout créneau hors période est considéré indisponible.
+    const monitorIds = [...new Set(slots.map(s => s.monitor_id).filter(Boolean))];
+    let monitorAvailMap = {};
+    if (monitorIds.length > 0) {
+      const avRes = await pool.query(
+        `SELECT user_id,
+                TO_CHAR(start_date, 'YYYY-MM-DD') as start_date,
+                TO_CHAR(end_date, 'YYYY-MM-DD') as end_date,
+                daily_start_time, daily_end_time
+         FROM monitor_availabilities
+         WHERE user_id = ANY($1)`,
+        [monitorIds]
+      );
+      for (const row of avRes.rows) {
+        if (!monitorAvailMap[row.user_id]) monitorAvailMap[row.user_id] = [];
+        monitorAvailMap[row.user_id].push(row);
+      }
+    }
+
+    slots = slots.map(slot => {
+      if (slot.status !== 'available' || !slot.monitor_id) return slot;
+      const periods = monitorAvailMap[slot.monitor_id];
+      if (!periods || periods.length === 0) return slot; // pas de restriction définie
+      const slotDate = new Date(slot.start_time);
+      const slotDateStr = slotDate.toISOString().slice(0, 10);
+      const inPeriod = periods.some(p => slotDateStr >= p.start_date && slotDateStr <= p.end_date);
+      if (!inPeriod) return { ...slot, status: 'booked' };
+      return slot;
+    });
+
     const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
     const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
 
     if (isGoogleSyncEnabled) {
-      // 2. On lit simplement la RAM du serveur (0.001 seconde d'attente)
-      // Utilise un vrai test de chevauchement (identique au planning admin) :
+      // Utilise un vrai test de chevauchement :
       // un créneau est bloqué si N'IMPORTE QUELLE partie de ce créneau tombe dans l'événement Google.
-      // L'ancienne logique (slotStart >= g.start) manquait les créneaux qui COMMENCENT avant
-      // l'événement mais se TERMINENT pendant celui-ci (ex: créneau 12h20-12h35 vs event 12h30-13h00).
       slots = slots.map(slot => {
         if (slot.status === 'available' && slot.monitor_id) {
           const googleBusySlots = googleSyncCache.get(slot.monitor_id) || [];
