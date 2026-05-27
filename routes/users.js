@@ -77,7 +77,7 @@ router.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
 
 router.get('/api/users/:id/availabilities', authenticateUser, async (req, res) => {
   try {
-    const r = await pool.query('SELECT *, TO_CHAR(start_date, \'YYYY-MM-DD\') as start_date, TO_CHAR(end_date, \'YYYY-MM-DD\') as end_date FROM monitor_availabilities WHERE user_id = $1 ORDER BY start_date ASC', [req.params.id]);
+    const r = await pool.query('SELECT id, user_id, created_at, TO_CHAR(start_date, \'YYYY-MM-DD\') as start_date, TO_CHAR(end_date, \'YYYY-MM-DD\') as end_date, daily_start_time, daily_end_time FROM monitor_availabilities WHERE user_id = $1 ORDER BY start_date ASC', [req.params.id]);
     res.json(r.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
