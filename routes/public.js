@@ -108,6 +108,32 @@ router.get('/api/public/availabilities', availabilitiesLimiter, async (req, res)
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+router.get('/api/public/available-dates', availabilitiesLimiter, async (req, res) => {
+  const { start, end } = req.query;
+  if (!start || !end) return res.status(400).json({ error: 'start et end requis' });
+  try {
+    const r = await pool.query(
+      `SELECT DISTINCT TO_CHAR(s.start_time::date, 'YYYY-MM-DD') as date
+       FROM slots s
+       WHERE s.status = 'available'
+         AND s.start_time::date >= $1::date
+         AND s.start_time::date <= $2::date
+         AND (
+           NOT EXISTS (SELECT 1 FROM monitor_availabilities ma WHERE ma.user_id = s.monitor_id)
+           OR EXISTS (
+             SELECT 1 FROM monitor_availabilities ma
+             WHERE ma.user_id = s.monitor_id
+               AND s.start_time::date >= ma.start_date
+               AND s.start_time::date <= ma.end_date
+           )
+         )
+       ORDER BY date ASC`,
+      [start, end]
+    );
+    res.json(r.rows.map(row => row.date));
+  } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
+});
+
 router.get('/api/public/next-available', availabilitiesLimiter, async (req, res) => {
   const { start } = req.query;
   if (!start) return res.status(400).json({ error: 'start requis' });
