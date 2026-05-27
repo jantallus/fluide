@@ -53,6 +53,32 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
     const r = await pool.query(query, params);
     let slots = r.rows;
 
+    // Filtrage par périodes de disponibilité moniteur
+    const monitorIdsForAvail = [...new Set(slots.map(s => s.monitor_id).filter(Boolean))];
+    if (monitorIdsForAvail.length > 0) {
+      const avRes = await pool.query(
+        `SELECT user_id,
+                TO_CHAR(start_date, 'YYYY-MM-DD') as start_date,
+                TO_CHAR(end_date, 'YYYY-MM-DD') as end_date
+         FROM monitor_availabilities WHERE user_id = ANY($1)`,
+        [monitorIdsForAvail]
+      );
+      const availMap = {};
+      for (const row of avRes.rows) {
+        if (!availMap[row.user_id]) availMap[row.user_id] = [];
+        availMap[row.user_id].push(row);
+      }
+      slots = slots.map(slot => {
+        if (slot.status !== 'available' || !slot.monitor_id) return slot;
+        const periods = availMap[slot.monitor_id];
+        if (!periods || periods.length === 0) return slot;
+        const slotDateStr = new Date(slot.start_time).toISOString().slice(0, 10);
+        const inPeriod = periods.some(p => slotDateStr >= p.start_date && slotDateStr <= p.end_date);
+        if (!inPeriod) return { ...slot, status: 'booked', title: '🗓️ Hors période', notes: 'En dehors des périodes d\'activité du moniteur' };
+        return slot;
+      });
+    }
+
     // 🎯 VÉRIFICATION: Le partage Google est-il activé ?
     const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
     const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
