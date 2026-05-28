@@ -258,6 +258,48 @@ router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema
   }
 });
 
+router.post('/api/delete-slots', authenticateAdmin, async (req, res) => {
+  const { startDate, endDate, monitor_id, forceOverwrite } = req.body;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'Dates manquantes.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const params = [startDate, endDate];
+    const monitorFilter = (monitor_id && monitor_id !== 'all') ? ' AND monitor_id = $3' : '';
+    if (monitor_id && monitor_id !== 'all') params.push(monitor_id);
+
+    if (!forceOverwrite) {
+      const check = await client.query(
+        `SELECT COUNT(*) FROM slots
+         WHERE start_time::date >= $1 AND start_time::date <= $2
+         AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE') OR (notes IS NOT NULL AND trim(notes) != ''))
+         ${monitorFilter}`,
+        params
+      );
+      if (parseInt(check.rows[0].count) > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          warning: true,
+          message: `⚠️ ATTENTION : Il y a ${check.rows[0].count} réservation(s) ou note(s) sur cette période. Voulez-vous VRAIMENT tout supprimer ?`,
+        });
+      }
+    }
+
+    const r = await client.query(
+      `DELETE FROM slots WHERE start_time::date >= $1 AND start_time::date <= $2 ${monitorFilter}`,
+      params
+    );
+    await client.query('COMMIT');
+    res.json({ deleted: r.rowCount });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
   const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
