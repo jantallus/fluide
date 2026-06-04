@@ -40,17 +40,19 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     `;
   } else {
     subject = "🪂 Confirmation de votre vol en parapente !";
-    let conseils = customMessage;
-    if (!conseils) {
-       const flightNameLower = itemName.toLowerCase();
-       if (flightNameLower.includes('loupiot')) {
-          conseils = "Pour ce vol enfant, prévoyez des chaussures fermées, un petit coupe-vent et <strong>n'oubliez pas son doudou</strong> s'il souhaite voler avec ! 🧸";
-       } else if (flightNameLower.includes('prestige') || flightNameLower.includes('aiguille') || flightNameLower.includes('loup')) {
-          conseils = "Pour ce vol en haute altitude, <strong>habillez-vous chaudement</strong> (polaire, veste coupe-vent, et gants légers recommandés). N'oubliez pas vos lunettes de soleil. 🏔️";
-       } else {
-          conseils = "Prévoyez de bonnes chaussures fermées pour le décollage, une veste coupe-vent et des lunettes de soleil. Sensations garanties ! 😎";
-       }
+    const flightNameLower = itemName.toLowerCase();
+
+    // Point de rendez-vous selon le vol
+    let meetingPoint = "";
+    if (flightNameLower.includes('beauregard')) {
+      meetingPoint = "Rendez-vous à l'arrivée de la Télécabine de Beauregard.";
+    } else if (flightNameLower.includes('aiguille') || (flightNameLower.includes('loup') && !flightNameLower.includes('loupiot'))) {
+      meetingPoint = "Rendez-vous à l'arrivée du Télésiège du Crêt du Loup.";
+    } else {
+      meetingPoint = "Rendez-vous au départ du Télésiège du Crêt du Merle.";
     }
+
+    const conseils = customMessage || "Prévoyez de bonnes chaussures fermées pour le décollage, une veste coupe-vent et des lunettes de soleil. Sensations garanties ! 😎";
 
     htmlContent = `
       <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -61,7 +63,7 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
           <p><strong>Date :</strong> ${dateOrCode}</p>
           <p><strong>Heure :</strong> ${timeOrValue}</p>
         </div>
-        <p>Nous vous attendons avec impatience au point de rendez-vous (Télécabine du Crêt du Loup).</p>
+        <p>${meetingPoint}</p>
         <div style="background-color: #fffbeb; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
           <p style="margin: 0;"><strong>💡 Nos conseils pour ce vol :</strong><br>${conseils.replace(/\n/g, '<br>')}</p>
         </div>
