@@ -43,16 +43,35 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     const flightNameLower = itemName.toLowerCase();
 
     // Point de rendez-vous selon le vol
+    // Hiver : Beauregard → télécabine Beauregard ; Crêt du Loup (exact) + Aiguille → télésiège Crêt du Loup
+    // Été (Loupiot, Découverte, Ascendance, Prestige) → télésiège Crêt du Merle
     let meetingPoint = "";
-    if (flightNameLower.includes('beauregard')) {
-      meetingPoint = "Rendez-vous à l'arrivée de la Télécabine de Beauregard.";
-    } else if (flightNameLower.includes('aiguille') || (flightNameLower.includes('loup') && !flightNameLower.includes('loupiot'))) {
-      meetingPoint = "Rendez-vous à l'arrivée du Télésiège du Crêt du Loup.";
+    const isBeauregard = flightNameLower.includes('beauregard');
+    const isHiverLoup = flightNameLower.includes('aiguille') ||
+      (flightNameLower.includes('loup') &&
+        !flightNameLower.includes('découverte') &&
+        !flightNameLower.includes('decouverte') &&
+        !flightNameLower.includes('ascendance') &&
+        !flightNameLower.includes('prestige') &&
+        !flightNameLower.includes('loupiot'));
+
+    if (isBeauregard) {
+      meetingPoint = "Rendez-vous en haut de la Télécabine de Beauregard.";
+    } else if (isHiverLoup) {
+      meetingPoint = "Rendez-vous en haut du Télésiège du Crêt du Loup.";
     } else {
-      meetingPoint = "Rendez-vous au départ du Télésiège du Crêt du Merle.";
+      meetingPoint = `Rendez-vous au départ du Télésiège du Crêt du Merle (<a href="https://maps.app.goo.gl/kPCbHKgpmxP1ytMYA" style="color:#E6007E;">voir sur Google Maps</a>).`;
     }
 
-    const conseils = customMessage || "Prévoyez de bonnes chaussures fermées pour le décollage, une veste coupe-vent et des lunettes de soleil. Sensations garanties ! 😎";
+    let defaultConseils;
+    if (isBeauregard) {
+      defaultConseils = "Venez habillés comme pour le ski : masque ou lunettes de soleil et gants indispensables. Les bâtons sont facultatifs mais si vous les avez, on peut les prendre en vol. Si vous souhaitez décoller à pied, prévoyez des chaussures montantes. Les sacs à dos sont à éviter.";
+    } else if (isHiverLoup) {
+      defaultConseils = "Venez habillés comme pour le ski : masque ou lunettes de soleil et gants indispensables. Les bâtons sont facultatifs mais si vous les avez, on peut les prendre en vol. Les sacs à dos sont à éviter.";
+    } else {
+      defaultConseils = "Prévoyez de bonnes chaussures fermées pour le décollage, une veste coupe-vent et des lunettes de soleil. Les sacs à dos sont à éviter. Sensations garanties ! 😎";
+    }
+    const conseils = customMessage || defaultConseils;
 
     htmlContent = `
       <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -102,6 +121,7 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   if (!process.env.BREVO_API_KEY || !customerPhone || itemType === 'gift_card') return;
 
   let customSms = "";
+  let rdv = "départ télésiège Crêt du Merle";
   try {
     const setRes = await pool.query('SELECT value FROM site_settings WHERE key = $1', [`sms_flight_${flightId}`]);
     if (setRes.rows.length > 0 && setRes.rows[0].value) {
@@ -111,9 +131,22 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
         .replace(/\[DATE\]/g, dateOrCode)
         .replace(/\[HEURE\]/g, timeOrValue);
     }
+    if (!customSms && flightId) {
+      const flightRes = await pool.query('SELECT name FROM flight_types WHERE id = $1', [flightId]);
+      if (flightRes.rows.length > 0) {
+        const n = flightRes.rows[0].name.toLowerCase();
+        if (n.includes('beauregard')) rdv = "haut télécabine Beauregard";
+        else if (n.includes('aiguille') || (n.includes('loup') && !n.includes('découverte') && !n.includes('decouverte') && !n.includes('ascendance') && !n.includes('prestige') && !n.includes('loupiot'))) rdv = "haut télésiège Crêt du Loup";
+      }
+    }
   } catch(e) { console.error("Erreur lecture settings SMS:", e); }
 
-  const message = customSms || `Bonjour ${customerName}, votre vol le ${dateOrCode} à ${timeOrValue} est confirmé ! Prévoyez de bonnes chaussures. À très vite - L'équipe Fluide.`;
+  const isHiver = rdv.includes('Beauregard') || rdv.includes('Crêt du Loup');
+  const conseils = isHiver
+    ? "Habillez-vous comme pour le ski (masque/lunettes, gants). Pas de sac à dos."
+    : "Bonnes chaussures fermées, coupe-vent. Pas de sac à dos.";
+
+  const message = customSms || `Bonjour ${customerName}, vol confirmé le ${dateOrCode} à ${timeOrValue}. RDV ${rdv}. ${conseils} À très vite - Fluide.`;
 
   let formattedPhone = customerPhone.replace(/\s+/g, '');
   if (formattedPhone.startsWith('0')) formattedPhone = '+33' + formattedPhone.substring(1);
