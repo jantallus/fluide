@@ -12,13 +12,6 @@ async function performBooking(client, contact, passengers, paymentData = null, b
 
     const slotsRes = await client.query(`SELECT * FROM slots WHERE start_time::date = $1 AND status = 'available' ORDER BY start_time ASC FOR UPDATE`, [p.date]);
     const availableSlots = slotsRes.rows;
-    let baseDur = 15;
-    if (availableSlots.length > 0) {
-      const s1 = new Date(availableSlots[0].start_time).getTime();
-      const e1 = new Date(availableSlots[0].end_time).getTime();
-      baseDur = Math.round((e1 - s1) / 60000) || 15;
-    }
-    const slotsNeeded = Math.ceil(flightDur / baseDur);
 
     const monSchedules = {};
     availableSlots.forEach(s => {
@@ -36,7 +29,15 @@ async function performBooking(client, contact, passengers, paymentData = null, b
         const tStr = new Date(monSlots[i].start_time).toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
         if (tStr === p.time) { startIndex = i; break; }
       }
-      if (startIndex !== -1 && startIndex + slotsNeeded <= monSlots.length) {
+      if (startIndex === -1) continue;
+
+      // Calcule slotsNeeded depuis la durée du créneau cible, pas du premier créneau global
+      const targetSlot = monSlots[startIndex];
+      const slotMs = new Date(targetSlot.end_time).getTime() - new Date(targetSlot.start_time).getTime();
+      const baseDur = Math.round(slotMs / 60000) || 15;
+      const slotsNeeded = Math.ceil(flightDur / baseDur);
+
+      if (startIndex + slotsNeeded <= monSlots.length) {
         let isValid = true;
         let sequence = [monSlots[startIndex]];
         for (let i = 1; i < slotsNeeded; i++) {
