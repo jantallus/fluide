@@ -3,6 +3,7 @@
 // Les deux chemins doivent produire exactement le même résultat pour une session donnée.
 
 const { randomUUID } = require('crypto');
+const Stripe = require('stripe');
 const { pool } = require('../db');
 const { performBooking } = require('./booking');
 const { generatePDFBuffer } = require('./pdf');
@@ -154,7 +155,43 @@ async function processStripeSession(session) {
         : {}),
     };
 
-    await performBooking(client, contact, passengers, pData, billingInfo);
+    try {
+      await performBooking(client, contact, passengers, pData, billingInfo);
+    } catch (bookingErr) {
+      await client.query('ROLLBACK');
+
+      // Remboursement automatique : le client a payé mais les créneaux ne sont plus dispo
+      if (session.payment_intent && session.amount_total > 0) {
+        try {
+          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+          await stripe.refunds.create({
+            payment_intent: session.payment_intent,
+            metadata: { reason: 'creneaux_indisponibles', detail: bookingErr.message.substring(0, 500) },
+          });
+          console.log(`💰 Remboursement automatique émis pour session ${session_id} : ${bookingErr.message}`);
+        } catch (refundErr) {
+          console.error(`❌ ECHEC REMBOURSEMENT pour ${session_id} — intervention manuelle requise :`, refundErr.message);
+        }
+        // Marque comme remboursé pour éviter un double traitement
+        try {
+          await pool.query(
+            'INSERT INTO stripe_payments (session_id, type) VALUES ($1, $2) ON CONFLICT (session_id) DO NOTHING',
+            [session_id, 'refunded']
+          );
+        } catch (_) {}
+        // Alerte admin
+        try {
+          await sendAdminNotificationEmail(
+            session.metadata.contact_name || '?',
+            session.metadata.contact_phone || '?',
+            `⚠️ REMBOURSEMENT AUTO — créneaux indisponibles (${bookingErr.message})`,
+            '—', '—'
+          );
+        } catch (_) {}
+      }
+
+      return { success: false, refunded: true, error: bookingErr.message };
+    }
 
     if (voucherCode) {
       await client.query(
@@ -198,7 +235,7 @@ async function processStripeSession(session) {
 
   } catch (err) {
     await client.query('ROLLBACK');
-    throw err; // Re-throw pour que l'appelant gère (log + réponse HTTP)
+    throw err;
   } finally {
     client.release();
   }

@@ -342,6 +342,45 @@ router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), a
       }
     }
 
+    // Vérification que les créneaux sont toujours disponibles avant d'ouvrir Stripe
+    for (const p of passengers) {
+      const flightDurRes = await client.query('SELECT duration_minutes FROM flight_types WHERE id = $1', [p.flightId]);
+      const flightDur = flightDurRes.rows[0]?.duration_minutes || 15;
+      const slotsRes = await client.query(
+        `SELECT * FROM slots WHERE start_time::date = $1 AND status = 'available' ORDER BY start_time ASC`,
+        [p.date]
+      );
+      const monSchedules = {};
+      slotsRes.rows.forEach(s => {
+        if (!monSchedules[s.monitor_id]) monSchedules[s.monitor_id] = [];
+        monSchedules[s.monitor_id].push(s);
+      });
+      let found = false;
+      for (const monId of Object.keys(monSchedules)) {
+        const monSlots = monSchedules[monId].sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+        const startIndex = monSlots.findIndex(s => {
+          const t = new Date(s.start_time).toLocaleTimeString('en-GB', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit', hour12: false });
+          return t === p.time;
+        });
+        if (startIndex === -1) continue;
+        const slotMs = new Date(monSlots[startIndex].end_time) - new Date(monSlots[startIndex].start_time);
+        const baseDur = Math.round(slotMs / 60000) || 15;
+        const slotsNeeded = Math.ceil(flightDur / baseDur);
+        if (startIndex + slotsNeeded <= monSlots.length) {
+          let valid = true;
+          for (let i = 1; i < slotsNeeded; i++) {
+            const gap = new Date(monSlots[startIndex + i].start_time) - new Date(monSlots[startIndex + i - 1].end_time);
+            if (Math.abs(gap) > 60000) { valid = false; break; }
+          }
+          if (valid) { found = true; break; }
+        }
+      }
+      if (!found) {
+        client.release();
+        return res.status(409).json({ error: `Le créneau ${p.time} du ${p.date} n'est plus disponible pour ${p.firstName}. Veuillez choisir un autre horaire.` });
+      }
+    }
+
     let originalPriceCents = flightTotalCents + complementsTotalCents;
     let discountAmountCents = 0;
     let appliedVoucher = null;
@@ -476,6 +515,9 @@ router.post('/api/public/confirm-booking', confirmLimiter, async (req, res) => {
       const row = stored.rows[0];
       if (row?.type === 'gift_card') {
         return res.json({ success: true, is_gift_card: true, code: row.result_code });
+      }
+      if (row?.type === 'refunded') {
+        return res.json({ success: false, refunded: true });
       }
       return res.json({ success: true });
     }
