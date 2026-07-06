@@ -222,9 +222,26 @@ async function processStripeSession(session) {
             day: 'numeric',
             month: 'long',
           });
+
+          // Résolution des noms de compléments (photos/vidéos etc.)
+          const allCompIds = [...new Set(passengers.flatMap(p => p.selectedComplements || []))];
+          let complementSummary = '';
+          if (allCompIds.length > 0) {
+            const compRes = await pool.query('SELECT id, name FROM complements WHERE id = ANY($1)', [allCompIds]);
+            const compMap = Object.fromEntries(compRes.rows.map(r => [r.id, r.name]));
+            const compCounts = {};
+            passengers.forEach(p => {
+              (p.selectedComplements || []).forEach(id => {
+                const name = compMap[id] || `Option #${id}`;
+                compCounts[name] = (compCounts[name] || 0) + 1;
+              });
+            });
+            complementSummary = Object.entries(compCounts).map(([name, count]) => `${name} × ${count}`).join(', ');
+          }
+
           await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
           await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
-          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time);
+          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time, passengers.length, complementSummary);
         }
       } catch (e) {
         console.error('❌ Erreur notifications Vol:', e);

@@ -165,7 +165,7 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
-async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue) {
+async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue, flightCount, complementSummary) {
   if (!process.env.BREVO_API_KEY) return;
 
   let adminEmailsStr = "contact@fluide-parapente.fr";
@@ -190,8 +190,10 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
         <p><strong>Client :</strong> ${customerName}</p>
         <p><strong>Téléphone :</strong> ${customerPhone}</p>
         <p><strong>Prestation :</strong> ${itemName}</p>
+        <p><strong>Nombre de vols :</strong> ${flightCount || 1}</p>
         <p><strong>Date :</strong> ${dateOrCode}</p>
         <p><strong>Heure :</strong> ${timeOrValue}</p>
+        ${complementSummary ? `<p><strong>Options :</strong> ${complementSummary}</p>` : ''}
       </div>
       <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/planning" style="display:inline-block; background-color:#0ea5e9; color:white; padding:12px 25px; text-decoration:none; border-radius:8px; font-weight:bold;">Voir le planning</a></p>
     </div>
