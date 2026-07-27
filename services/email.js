@@ -197,7 +197,7 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
-async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue, flightCount, complementSummary, flightLines = null) {
+async function sendAdminNotificationEmail(customerName, customerPhone, customerEmail, itemName, dateOrCode, timeOrValue, flightCount, complementSummary, flightLines = null) {
   if (!process.env.BREVO_API_KEY) return;
 
   let adminEmailsStr = "contact@fluide-parapente.fr";
@@ -213,7 +213,10 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
 
   const toList = emailsArray.map(email => ({ email: email, name: "Équipe Fluide" }));
 
-  const subject = `🚀 Nouvelle Réservation : ${itemName} - ${dateOrCode}`;
+  const subjectFlights = flightLines && flightLines.length > 0
+    ? flightLines.map(l => l.count > 1 ? `${l.count} × ${l.name}` : l.name).join(' + ')
+    : itemName;
+  const subject = `🚀 Nouvelle Réservation : ${subjectFlights} - ${dateOrCode}`;
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
       <h2 style="color: #059669;">Nouvelle Réservation Confirmée ! 🎉</h2>
@@ -221,6 +224,7 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
       <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0ea5e9;">
         <p><strong>Client :</strong> ${customerName}</p>
         <p><strong>Téléphone :</strong> ${customerPhone}</p>
+        <p><strong>Email :</strong> <a href="mailto:${customerEmail}">${customerEmail}</a></p>
         <p><strong>Date :</strong> ${dateOrCode}</p>
         ${flightLines && flightLines.length > 0
           ? `<p><strong>Vols :</strong></p><ul style="margin:4px 0 8px; padding-left:20px;">${
