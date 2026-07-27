@@ -1,7 +1,7 @@
 const db = require('../db');
 const { pool } = db;
 
-async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null, pdfBuffer = null) {
+async function sendConfirmationEmail(customerEmail, customerName, itemType, itemName, dateOrCode, timeOrValue, flightId = null, pdfBuffer = null, flightLines = null) {
   if (!process.env.BREVO_API_KEY) return console.log("⚠️ BREVO_API_KEY manquante. Email non envoyé.");
 
   let customMessage = "";
@@ -43,9 +43,6 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     const flightNameLower = itemName.toLowerCase();
 
     // Point de rendez-vous selon le vol
-    // Hiver : Beauregard → télécabine Beauregard ; Crêt du Loup (exact) + Aiguille → télésiège Crêt du Loup
-    // Été (Loupiot, Découverte, Ascendance, Prestige) → télésiège Crêt du Merle
-    let meetingPoint = "";
     const isBeauregard = flightNameLower.includes('beauregard');
     const isHiverLoup = flightNameLower.includes('aiguille') ||
       (flightNameLower.includes('loup') &&
@@ -55,13 +52,15 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
         !flightNameLower.includes('prestige') &&
         !flightNameLower.includes('loupiot'));
 
+    let meetingLocationHtml = "";
     if (isBeauregard) {
-      meetingPoint = "Rendez-vous en haut de la Télécabine de Beauregard.";
+      meetingLocationHtml = "en haut de la Télécabine de Beauregard";
     } else if (isHiverLoup) {
-      meetingPoint = "Rendez-vous en haut du Télésiège du Crêt du Loup.";
+      meetingLocationHtml = "en haut du Télésiège du Crêt du Loup";
     } else {
-      meetingPoint = `Rendez-vous au départ du Télésiège du Crêt du Merle (<a href="https://maps.app.goo.gl/kPCbHKgpmxP1ytMYA" style="color:#E6007E;">voir sur Google Maps</a>).`;
+      meetingLocationHtml = `au départ du Télésiège du Crêt du Merle (<a href="https://maps.app.goo.gl/kPCbHKgpmxP1ytMYA" style="color:#E6007E;">voir sur Google Maps</a>)`;
     }
+    const meetingPoint = `Rendez-vous ${meetingLocationHtml}.`;
 
     let defaultConseils;
     if (isBeauregard) {
@@ -73,16 +72,45 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     }
     const conseils = customMessage || defaultConseils;
 
-    htmlContent = `
-      <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-        <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
-        <p>Votre réservation avec <strong>Fluide Parapente</strong> est bien confirmée ! 🎉</p>
+    // Bloc récapitulatif des vols
+    const fmtTime = (t) => t ? t.replace(':', 'h') : t;
+    let reservationBlock = '';
+    if (flightLines && flightLines.length > 0) {
+      const uniqueTimes = [...new Set(flightLines.map(l => l.time))].sort();
+      let rdvSentence;
+      if (uniqueTimes.length === 1) {
+        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ${meetingLocationHtml}.`;
+      } else if (uniqueTimes.length === 2) {
+        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour la première rotation puis à ${fmtTime(uniqueTimes[1])} pour la seconde, ${meetingLocationHtml}.`;
+      } else {
+        const last = uniqueTimes.pop();
+        rdvSentence = `Rendez-vous à ${uniqueTimes.map(fmtTime).join(', ')} puis à ${fmtTime(last)} pour la dernière rotation, ${meetingLocationHtml}.`;
+      }
+      const lignes = flightLines.map(l =>
+        `<li style="margin-bottom:4px;">${l.count}&nbsp;× <strong>${l.name}</strong> (${(l.totalCents / 100).toFixed(0)}&nbsp;€) — ${fmtTime(l.time)}</li>`
+      ).join('');
+      reservationBlock = `
+        <div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin:0 0 8px;"><strong>Date :</strong> ${dateOrCode}</p>
+          <p style="margin:0 0 6px;"><strong>Prestations :</strong></p>
+          <ul style="margin:0 0 10px; padding-left:20px;">${lignes}</ul>
+          <p style="margin:0;">${rdvSentence}</p>
+        </div>`;
+    } else {
+      reservationBlock = `
         <div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
           <p><strong>Prestation :</strong> ${itemName}</p>
           <p><strong>Date :</strong> ${dateOrCode}</p>
           <p><strong>Heure :</strong> ${timeOrValue}</p>
-        </div>
-        <p>${meetingPoint}</p>
+        </div>`;
+    }
+
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #0284c7;">Bonjour ${customerName},</h2>
+        <p>Votre réservation avec <strong>Fluide Parapente</strong> est bien confirmée ! 🎉</p>
+        ${reservationBlock}
+        ${!(flightLines && flightLines.length > 0) ? `<p>${meetingPoint}</p>` : ''}
         <div style="background-color: #fffbeb; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
           <p style="margin: 0;"><strong>💡 Nos conseils pour ce vol :</strong><br>${conseils.replace(/\n/g, '<br>')}</p>
         </div>

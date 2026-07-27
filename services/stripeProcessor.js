@@ -239,7 +239,21 @@ async function processStripeSession(session) {
             complementSummary = Object.entries(compCounts).map(([name, count]) => `${name} × ${count}`).join(', ');
           }
 
-          await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId);
+          // Groupe les passagers par vol+horaire et récupère les prix
+          const uniqueFlightIds = [...new Set(passengers.map(p => parseInt(p.flightId)))];
+          const priceRes = await pool.query('SELECT id, price_cents FROM flight_types WHERE id = ANY($1)', [uniqueFlightIds]);
+          const priceMap = Object.fromEntries(priceRes.rows.map(r => [r.id, r.price_cents]));
+          const groupMap = {};
+          passengers.forEach(p => {
+            const key = `${p.flightId}|${p.time}`;
+            if (!groupMap[key]) groupMap[key] = { flightId: parseInt(p.flightId), flightName: p.flightName, time: p.time, count: 0 };
+            groupMap[key].count++;
+          });
+          const flightLines = Object.values(groupMap)
+            .sort((a, b) => a.time.localeCompare(b.time))
+            .map(g => ({ name: g.flightName, count: g.count, time: g.time, totalCents: (priceMap[g.flightId] || 0) * g.count }));
+
+          await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId, null, flightLines);
           await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
           await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time, passengers.length, complementSummary);
         }
