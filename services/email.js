@@ -77,7 +77,15 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     let reservationBlock = '';
     if (flightLines && flightLines.length > 0) {
       const uniqueTimes = [...new Set(flightLines.map(l => l.time))].sort();
-      const rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ${meetingLocationHtml}.`;
+      let rdvSentence;
+      if (uniqueTimes.length === 1) {
+        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])}, ${meetingLocationHtml}.`;
+      } else {
+        const rotations = uniqueTimes.map((t, i) =>
+          i === 0 ? `à ${fmtTime(t)} pour la première rotation` : `à ${fmtTime(t)} pour la seconde`
+        ).join(' puis ');
+        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ou ${rotations} si vous préférez vous y retrouver en décalé, ${meetingLocationHtml}.`;
+      }
       const lignes = flightLines.map(l =>
         `<li style="margin-bottom:4px;">${l.count}&nbsp;× <strong>${l.name}</strong> (${(l.totalCents / 100).toFixed(0)}&nbsp;€) — ${fmtTime(l.time)}</li>`
       ).join('');
