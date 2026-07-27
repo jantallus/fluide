@@ -77,15 +77,7 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
     let reservationBlock = '';
     if (flightLines && flightLines.length > 0) {
       const uniqueTimes = [...new Set(flightLines.map(l => l.time))].sort();
-      let rdvSentence;
-      if (uniqueTimes.length === 1) {
-        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ${meetingLocationHtml}.`;
-      } else if (uniqueTimes.length === 2) {
-        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour la première rotation puis à ${fmtTime(uniqueTimes[1])} pour la seconde, ${meetingLocationHtml}.`;
-      } else {
-        const last = uniqueTimes.pop();
-        rdvSentence = `Rendez-vous à ${uniqueTimes.map(fmtTime).join(', ')} puis à ${fmtTime(last)} pour la dernière rotation, ${meetingLocationHtml}.`;
-      }
+      const rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ${meetingLocationHtml}.`;
       const lignes = flightLines.map(l =>
         `<li style="margin-bottom:4px;">${l.count}&nbsp;× <strong>${l.name}</strong> (${(l.totalCents / 100).toFixed(0)}&nbsp;€) — ${fmtTime(l.time)}</li>`
       ).join('');
