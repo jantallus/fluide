@@ -257,7 +257,7 @@ async function processStripeSession(session) {
           for (const line of flightLines) {
             await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, line.time, line.flightId, line);
           }
-          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time, passengers.length, complementSummary);
+          await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time, passengers.length, complementSummary, flightLines);
         }
       } catch (e) {
         console.error('❌ Erreur notifications Vol:', e);

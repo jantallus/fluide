@@ -197,7 +197,7 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
   } catch (err) { console.error("❌ Erreur envoi SMS :", err); }
 }
 
-async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue, flightCount, complementSummary) {
+async function sendAdminNotificationEmail(customerName, customerPhone, itemName, dateOrCode, timeOrValue, flightCount, complementSummary, flightLines = null) {
   if (!process.env.BREVO_API_KEY) return;
 
   let adminEmailsStr = "contact@fluide-parapente.fr";
@@ -221,10 +221,16 @@ async function sendAdminNotificationEmail(customerName, customerPhone, itemName,
       <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0ea5e9;">
         <p><strong>Client :</strong> ${customerName}</p>
         <p><strong>Téléphone :</strong> ${customerPhone}</p>
-        <p><strong>Prestation :</strong> ${itemName}</p>
-        <p><strong>Nombre de vols :</strong> ${flightCount || 1}</p>
         <p><strong>Date :</strong> ${dateOrCode}</p>
-        <p><strong>Heure :</strong> ${timeOrValue}</p>
+        ${flightLines && flightLines.length > 0
+          ? `<p><strong>Vols :</strong></p><ul style="margin:4px 0 8px; padding-left:20px;">${
+              flightLines.map(l => {
+                const fmtT = (t) => t ? t.replace(':', 'h') : t;
+                return `<li>${l.count}&nbsp;× ${l.name} — ${fmtT(l.time)} (${(l.totalCents / 100).toFixed(0)}&nbsp;€)</li>`;
+              }).join('')
+            }</ul>`
+          : `<p><strong>Prestation :</strong> ${itemName}</p><p><strong>Nombre de vols :</strong> ${flightCount || 1}</p><p><strong>Heure :</strong> ${timeOrValue}</p>`
+        }
         ${complementSummary ? `<p><strong>Options :</strong> ${complementSummary}</p>` : ''}
       </div>
       <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/planning" style="display:inline-block; background-color:#0ea5e9; color:white; padding:12px 25px; text-decoration:none; border-radius:8px; font-weight:bold;">Voir le planning</a></p>
