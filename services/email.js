@@ -145,7 +145,7 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
   } catch (err) { console.error("❌ Erreur envoi email :", err); }
 }
 
-async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOrCode, timeOrValue, flightId = null) {
+async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOrCode, timeOrValue, flightId = null, flightLine = null) {
   if (!process.env.BREVO_API_KEY || !customerPhone || itemType === 'gift_card') return;
 
   let customSms = "";
@@ -174,7 +174,11 @@ async function sendConfirmationSMS(customerPhone, customerName, itemType, dateOr
     ? "Habillez-vous comme pour le ski (masque/lunettes, gants). Pas de sac à dos."
     : "Bonnes chaussures fermées, coupe-vent. Pas de sac à dos.";
 
-  const message = customSms || `Bonjour ${customerName}, vol confirmé le ${dateOrCode} à ${timeOrValue}. RDV ${rdv}. ${conseils} À très vite - Fluide.`;
+  const fmtT = (t) => t ? t.replace(':', 'h') : t;
+  const volLabel = flightLine
+    ? (flightLine.count > 1 ? `${flightLine.count} vols ${flightLine.name}` : `vol ${flightLine.name}`)
+    : 'vol';
+  const message = customSms || `Bonjour ${customerName}, ${volLabel} confirmé le ${dateOrCode} à ${fmtT(timeOrValue)}. RDV ${rdv}. ${conseils} À très vite - Fluide.`;
 
   let formattedPhone = customerPhone.replace(/\s+/g, '');
   if (formattedPhone.startsWith('0')) formattedPhone = '+33' + formattedPhone.substring(1);

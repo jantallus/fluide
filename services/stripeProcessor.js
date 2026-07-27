@@ -254,7 +254,9 @@ async function processStripeSession(session) {
             .map(g => ({ name: g.flightName, count: g.count, time: g.time, totalCents: (priceMap[g.flightId] || 0) * g.count }));
 
           await sendConfirmationEmail(contact.email, session.metadata.contact_name, 'flight', firstPass.flightName, beautifulDate, firstPass.time, firstPass.flightId, null, flightLines);
-          await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, firstPass.time, firstPass.flightId);
+          for (const line of flightLines) {
+            await sendConfirmationSMS(contact.phone, session.metadata.contact_name, 'flight', beautifulDate, line.time, line.flightId, line);
+          }
           await sendAdminNotificationEmail(session.metadata.contact_name, contact.phone, firstPass.flightName, beautifulDate, firstPass.time, passengers.length, complementSummary);
         }
       } catch (e) {
