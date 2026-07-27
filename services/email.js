@@ -84,7 +84,7 @@ async function sendConfirmationEmail(customerEmail, customerName, itemType, item
         const rotations = uniqueTimes.map((t, i) =>
           i === 0 ? `à ${fmtTime(t)} pour la première rotation` : `à ${fmtTime(t)} pour la seconde`
         ).join(' puis ');
-        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} pour monter tous ensemble, ou ${rotations} si vous préférez vous y retrouver en décalé, ${meetingLocationHtml}.`;
+        rdvSentence = `Rendez-vous à ${fmtTime(uniqueTimes[0])} ${meetingLocationHtml} pour monter tous ensemble, ou ${rotations} si vous préférez vous y retrouver en décalé.`;
       }
       const lignes = flightLines.map(l =>
         `<li style="margin-bottom:4px;">${l.count}&nbsp;× <strong>${l.name}</strong> (${(l.totalCents / 100).toFixed(0)}&nbsp;€) — ${fmtTime(l.time)}</li>`
