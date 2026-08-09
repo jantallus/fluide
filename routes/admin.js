@@ -129,4 +129,49 @@ router.post('/api/clients/bulk-delete', authenticateUser, async (req, res) => {
 // 📅 GÉNÉRATEUR DE FLUX ICAL (CALENDRIER PILOTES)
 // ==========================================
 
+// ==========================================
+// 📡 BACKFILL GOOGLE CALENDAR
+// ==========================================
+const { notifyGoogleCalendar } = require('../services/email');
+
+router.post('/api/admin/sync-google-backfill', authenticateAdmin, async (req, res) => {
+  const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
+  if (!webhookUrl) return res.status(500).json({ error: 'GOOGLE_SCRIPT_URL non configurée' });
+
+  const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+  if (!syncSetting.rows.length || syncSetting.rows[0].value !== 'true') {
+    return res.status(400).json({ error: 'Synchro Google désactivée dans les paramètres' });
+  }
+
+  // Tous les créneaux clients futurs (non Suite, non blocages internes)
+  const slotsRes = await pool.query(`
+    SELECT s.id, s.title, s.start_time, s.end_time, s.phone, s.booking_options, s.client_message,
+           u.first_name AS monitor_name
+    FROM slots s
+    JOIN users u ON u.id = s.monitor_id
+    WHERE s.status = 'booked'
+      AND s.start_time >= NOW()
+      AND s.title IS NOT NULL
+      AND s.title NOT LIKE '↪️ Suite%'
+      AND s.title NOT LIKE '%NON DISPO%'
+      AND s.title NOT LIKE '☕%'
+      AND s.title NOT LIKE '%❌%'
+    ORDER BY s.start_time ASC
+  `);
+
+  let pushed = 0;
+  for (const slot of slotsRes.rows) {
+    let desc = '';
+    if (slot.phone) desc += `Tel: ${slot.phone}\n`;
+    if (slot.booking_options) desc += `Options: ${slot.booking_options}\n`;
+    if (slot.client_message) desc += `Message client: ${slot.client_message}\n`;
+    notifyGoogleCalendar(slot.monitor_name, slot.title, slot.start_time, slot.end_time, desc);
+    pushed++;
+    // Petite pause pour ne pas saturer Google (50 req/s max)
+    if (pushed % 10 === 0) await new Promise(r => setTimeout(r, 200));
+  }
+
+  res.json({ success: true, pushed, message: `${pushed} réservation(s) envoyées à Google Agenda.` });
+});
+
 module.exports = router;
