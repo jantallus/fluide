@@ -6,7 +6,7 @@ const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { QuickPatchSchema } = require('../schemas');
 const { googleSyncCache, invalidateCacheForMonitor } = require('../services/googleSync');
-const { notifyGoogleCalendar } = require('../services/email');
+const { notifyGoogleCalendar, deleteGoogleCalendarEvent } = require('../services/email');
 
 // Lit les créneaux Google occupés depuis le cache (chargé par googleSync.js toutes les 2 min)
 async function getGoogleBusySlots(monitorName, webhookUrl) {
@@ -167,11 +167,17 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
 
     const updatedSlot = result.rows[0];
 
-    // Quand un créneau est libéré, on invalide le cache Google de ce moniteur
-    // pour que le prochain GET /api/slots re-fetch les données fraîches depuis Google
-    // (évite qu'un événement supprimé de Google Calendar re-bloque le créneau)
+    // Quand un créneau est libéré : invalide le cache ET supprime l'événement Google
     if (updatedSlot.status === 'available' && updatedSlot.monitor_id) {
       invalidateCacheForMonitor(updatedSlot.monitor_id);
+
+      const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+      if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
+        const monRes = await pool.query('SELECT first_name, google_sync_enabled FROM users WHERE id = $1', [updatedSlot.monitor_id]);
+        if (monRes.rows.length > 0 && monRes.rows[0].google_sync_enabled) {
+          deleteGoogleCalendarEvent(monRes.rows[0].first_name, updatedSlot.start_time, updatedSlot.end_time);
+        }
+      }
     }
 
     // 🎯 SYNC GOOGLE : Envoi des réservations manuelles depuis le backoffice

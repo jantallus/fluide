@@ -260,25 +260,37 @@ async function sendAdminNotificationEmail(customerName, customerPhone, customerE
 async function notifyGoogleCalendar(monitorName, title, startTime, endTime, description) {
   const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
   if (!webhookUrl) return;
-  
+
   try {
     const response = await fetch(webhookUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ monitorName, title, startTime, endTime, description }),
       redirect: 'follow'
     });
-    
-    // On lit la réponse de Google et on l'affiche dans Railway
     const responseText = await response.text();
     console.log(`📡 Réponse de Google pour ${monitorName} :`, responseText);
-    
   } catch (err) {
     console.error("❌ Erreur de synchro avec Google Script :", err);
   }
 }
 
+async function deleteGoogleCalendarEvent(monitorName, startTime, endTime) {
+  const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
+  if (!webhookUrl) return;
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', monitorName, startTime, endTime }),
+      redirect: 'follow'
+    });
+    const responseText = await response.text();
+    console.log(`🗑️ Suppression Google Calendar pour ${monitorName} :`, responseText);
+  } catch (err) {
+    console.error("❌ Erreur suppression Google Calendar :", err);
+  }
+}
 
-module.exports = { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail, notifyGoogleCalendar };
+
+module.exports = { sendConfirmationEmail, sendConfirmationSMS, sendAdminNotificationEmail, notifyGoogleCalendar, deleteGoogleCalendarEvent };
