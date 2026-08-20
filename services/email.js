@@ -279,10 +279,13 @@ async function deleteGoogleCalendarEvent(monitorName, startTime, endTime) {
   const webhookUrl = process.env.GOOGLE_SCRIPT_URL;
   if (!webhookUrl) return;
   try {
+    const startIso = startTime instanceof Date ? startTime.toISOString() : new Date(startTime).toISOString();
+    const endIso   = endTime   instanceof Date ? endTime.toISOString()   : new Date(endTime).toISOString();
+    console.log(`🗑️ Tentative suppression Google Calendar pour ${monitorName} : ${startIso} → ${endIso}`);
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete', monitorName, startTime, endTime }),
+      body: JSON.stringify({ action: 'delete', monitorName, startTime: startIso, endTime: endIso }),
       redirect: 'follow'
     });
     const responseText = await response.text();
