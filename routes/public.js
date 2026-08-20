@@ -430,7 +430,7 @@ router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), a
       await client.query('BEGIN');
       let pData = null;
       if (appliedPartner) {
-        pData = { partner: true, partner_id: appliedPartner.id, partner_name: appliedPartner.name, code: appliedPartner.code };
+        pData = { partner: true, partner_id: appliedPartner.id, partner_name: appliedPartner.name, code: appliedPartner.code, partner_color: appliedPartner.color_code };
       } else if (appliedVoucher) {
         pData = { voucher: originalPriceCents, code: appliedVoucher.code, code_type: appliedVoucher.type };
       }
