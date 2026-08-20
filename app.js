@@ -46,6 +46,7 @@ app.use('/', require('./routes/users'));
 app.use('/', require('./routes/flights'));
 app.use('/', require('./routes/planning'));
 app.use('/', require('./routes/giftCards'));
+app.use('/', require('./routes/partners'));
 app.use('/', require('./routes/admin'));
 app.use('/', require('./routes/public'));
 

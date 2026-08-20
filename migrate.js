@@ -122,6 +122,20 @@ const migrations = [
     name: '016_flight_types_activity_gopro',
     sql: `ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS activity_gopro BOOLEAN NOT NULL DEFAULT false;`
   },
+  {
+    name: '017_partners_table',
+    sql: `
+      CREATE TABLE IF NOT EXISTS partners (
+        id          SERIAL PRIMARY KEY,
+        name        VARCHAR(255) NOT NULL,
+        code        VARCHAR(50)  UNIQUE NOT NULL,
+        color_code  VARCHAR(7)   NOT NULL DEFAULT '#6366f1',
+        booking_fields JSONB    NOT NULL DEFAULT '{"name":true,"phone":true,"email":true,"flight_type":true,"weight":false,"notes":false}',
+        is_active   BOOLEAN      NOT NULL DEFAULT true,
+        created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      );
+    `
+  },
 ];
 
 async function runMigrations() {
