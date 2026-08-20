@@ -50,10 +50,15 @@ let syncInterval = setInterval(runBackgroundGoogleSync, 120000);
 // 🚀 On lance un premier check 5 secondes après le démarrage du serveur
 let syncTimeout = setTimeout(runBackgroundGoogleSync, 5000);
 
+/** Invalide le cache d'un moniteur pour forcer une re-fetch au prochain appel. */
+function invalidateCacheForMonitor(monitorId) {
+  if (monitorId != null) googleSyncCache.delete(monitorId);
+}
+
 /** Arrête proprement les timers (appelé lors du graceful shutdown). */
 function stopSync() {
   clearInterval(syncInterval);
   clearTimeout(syncTimeout);
 }
 
-module.exports = { googleSyncCache, stopSync };
+module.exports = { googleSyncCache, invalidateCacheForMonitor, stopSync };

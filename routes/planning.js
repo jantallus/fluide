@@ -5,7 +5,7 @@ const { pool } = db;
 const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { QuickPatchSchema } = require('../schemas');
-const { googleSyncCache } = require('../services/googleSync');
+const { googleSyncCache, invalidateCacheForMonitor } = require('../services/googleSync');
 const { notifyGoogleCalendar } = require('../services/email');
 
 // Lit les créneaux Google occupés depuis le cache (chargé par googleSync.js toutes les 2 min)
@@ -164,8 +164,15 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: "Créneau introuvable" });
-    
+
     const updatedSlot = result.rows[0];
+
+    // Quand un créneau est libéré, on invalide le cache Google de ce moniteur
+    // pour que le prochain GET /api/slots re-fetch les données fraîches depuis Google
+    // (évite qu'un événement supprimé de Google Calendar re-bloque le créneau)
+    if (updatedSlot.status === 'available' && updatedSlot.monitor_id) {
+      invalidateCacheForMonitor(updatedSlot.monitor_id);
+    }
 
     // 🎯 SYNC GOOGLE : Envoi des réservations manuelles depuis le backoffice
     // On vérifie que c'est une vraie réservation client
