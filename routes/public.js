@@ -171,6 +171,17 @@ router.get('/api/public/next-available', availabilitiesLimiter, async (req, res)
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
 });
 
+router.get('/api/public/partners/check/:code', availabilitiesLimiter, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, code, color_code, booking_fields FROM partners WHERE UPPER(code) = UPPER($1) AND is_active = true`,
+      [req.params.code]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Code partenaire inconnu ou inactif.' });
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
 router.get('/api/public/site-settings', async (req, res) => {
   try {
     const r = await pool.query("SELECT key, value FROM site_settings WHERE key IN ('physical_gift_card_enabled', 'physical_gift_card_price', 'display_days_count')");
@@ -296,7 +307,7 @@ router.post('/api/public/checkout-gift-card', checkoutLimiter, validate(Checkout
 });
 
 router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), async (req, res) => {
-  const { contact, passengers, voucher_code } = req.body;
+  const { contact, passengers, voucher_code, partner_code } = req.body;
 
   // Limite configurable depuis le backoffice (clé : max_passengers_per_booking, défaut : 8)
   if (!Array.isArray(passengers) || passengers.length === 0) {
@@ -384,8 +395,17 @@ router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), a
     let originalPriceCents = flightTotalCents + complementsTotalCents;
     let discountAmountCents = 0;
     let appliedVoucher = null;
+    let appliedPartner = null;
 
-    if (voucher_code) {
+    if (partner_code) {
+      const pRes = await client.query(`SELECT * FROM partners WHERE UPPER(code) = UPPER($1) AND is_active = true`, [partner_code]);
+      if (pRes.rows.length > 0) {
+        appliedPartner = pRes.rows[0];
+        discountAmountCents = originalPriceCents; // 100% discount for partners
+      }
+    }
+
+    if (!appliedPartner && voucher_code) {
       const vRes = await client.query(`SELECT * FROM gift_cards WHERE UPPER(code) = UPPER($1) AND status = 'valid'`, [voucher_code]);
       if (vRes.rows.length > 0) {
         appliedVoucher = vRes.rows[0];
@@ -394,7 +414,7 @@ router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), a
         } else if (appliedVoucher.type === 'promo') {
           const scope = appliedVoucher.discount_scope || 'both';
           let targetAmountCents = originalPriceCents;
-          
+
           if (scope === 'flight') targetAmountCents = flightTotalCents;
           if (scope === 'complements') targetAmountCents = complementsTotalCents;
 
@@ -409,7 +429,9 @@ router.post('/api/public/checkout', checkoutLimiter, validate(CheckoutSchema), a
     if (finalPriceCents === 0) {
       await client.query('BEGIN');
       let pData = null;
-      if (appliedVoucher) {
+      if (appliedPartner) {
+        pData = { partner: true, partner_id: appliedPartner.id, partner_name: appliedPartner.name, code: appliedPartner.code };
+      } else if (appliedVoucher) {
         pData = { voucher: originalPriceCents, code: appliedVoucher.code, code_type: appliedVoucher.type };
       }
       await performBooking(client, contact, passengers, pData);

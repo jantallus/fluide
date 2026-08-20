@@ -42,6 +42,7 @@ const CheckoutSchema = z.object({
   }),
   passengers:   z.array(PassengerSchema).min(1, 'Au moins un passager requis').max(10),
   voucher_code: z.string().max(50).trim().nullish(), // null envoyé par le frontend quand aucun bon appliqué
+  partner_code: z.string().max(50).trim().nullish(),
 });
 
 
