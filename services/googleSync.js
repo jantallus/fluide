@@ -1,5 +1,6 @@
 const db = require('../db');
 const { pool } = db;
+const { notifyGoogleCalendar } = require('./email');
 
 const googleSyncCache = new Map();
 let isSyncing = false;
@@ -36,6 +37,31 @@ async function runBackgroundGoogleSync() {
         if (!Array.isArray(slots)) continue;
         googleSyncCache.set(mon.id, slots);
         console.log(`✅ Sync Google ${mon.first_name} : ${slots.length} événement(s)`);
+
+        // Recréer les événements Fluide supprimés de Google Calendar
+        const bookedRes = await pool.query(
+          `SELECT id, title, start_time, end_time, notes, booking_options
+           FROM slots
+           WHERE monitor_id = $1
+             AND status = 'booked'
+             AND start_time > NOW()
+             AND start_time < NOW() + INTERVAL '90 days'
+             AND payment_data->>'google_synced' = 'true'`,
+          [mon.id]
+        );
+        for (const slot of bookedRes.rows) {
+          const slotStart = new Date(slot.start_time).getTime();
+          const slotEnd   = new Date(slot.end_time).getTime();
+          const hasEvent  = slots.some(g => g.start < slotEnd && g.end > slotStart);
+          if (!hasEvent) {
+            console.log(`🔄 Recréation Google Calendar : ${slot.title} @ ${new Date(slot.start_time).toISOString()}`);
+            const desc = [
+              slot.booking_options ? `Options: ${slot.booking_options}` : '',
+              slot.notes || ''
+            ].filter(Boolean).join('\n');
+            notifyGoogleCalendar(mon.first_name, slot.title, slot.start_time, slot.end_time, desc);
+          }
+        }
       } catch(e) {
         console.error("Erreur sync Google pour", mon.first_name, ":", e.message);
       }
