@@ -27,13 +27,15 @@ async function runBackgroundGoogleSync() {
           console.warn(`Sync Google ${mon.first_name} : HTTP ${resp.status}`);
           continue;
         }
-        const contentType = resp.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          console.warn(`Sync Google ${mon.first_name} : réponse non-JSON (${contentType}) — vérifier le déploiement du Apps Script`);
+        const text = await resp.text();
+        let slots;
+        try { slots = JSON.parse(text); } catch {
+          console.warn(`Sync Google ${mon.first_name} : réponse non-JSON — vérifier le déploiement du Apps Script`);
           continue;
         }
-        const slots = await resp.json();
+        if (!Array.isArray(slots)) continue;
         googleSyncCache.set(mon.id, slots);
+        console.log(`✅ Sync Google ${mon.first_name} : ${slots.length} événement(s)`);
       } catch(e) {
         console.error("Erreur sync Google pour", mon.first_name, ":", e.message);
       }

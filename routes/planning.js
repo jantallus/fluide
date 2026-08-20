@@ -24,8 +24,13 @@ async function getGoogleBusySlots(monitorName, webhookUrl) {
   try {
     const url = webhookUrl + '?monitorName=' + encodeURIComponent(monitorName);
     const resp = await fetch(url);
-    const slots = await resp.json();
-    return Array.isArray(slots) ? slots.map(g => ({ start: new Date(g.start).getTime(), end: new Date(g.end).getTime() })) : [];
+    const text = await resp.text();
+    const slots = JSON.parse(text);
+    if (Array.isArray(slots)) {
+      googleSyncCache.set(monRes.rows[0].id, slots);
+      return slots.map(g => ({ start: new Date(g.start).getTime(), end: new Date(g.end).getTime() }));
+    }
+    return [];
   } catch (e) {
     return [];
   }
