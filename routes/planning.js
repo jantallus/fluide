@@ -175,7 +175,7 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
       if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
         const monRes = await pool.query('SELECT first_name, google_sync_enabled FROM users WHERE id = $1', [updatedSlot.monitor_id]);
         if (monRes.rows.length > 0 && monRes.rows[0].google_sync_enabled) {
-          deleteGoogleCalendarEvent(monRes.rows[0].first_name, updatedSlot.start_time, updatedSlot.end_time);
+          await deleteGoogleCalendarEvent(monRes.rows[0].first_name, updatedSlot.start_time, updatedSlot.end_time);
         }
       }
     }
