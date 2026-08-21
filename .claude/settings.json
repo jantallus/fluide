@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(node -e \"require\\('./services/googleSync'\\)\")",
+      "Bash(node --check services/googleSync.js)",
+      "Bash(node --check services/booking.js)",
+      "Bash(node --check routes/planning.js)"
+    ]
+  }
+}

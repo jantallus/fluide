@@ -123,6 +123,14 @@ const migrations = [
     sql: `ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS activity_gopro BOOLEAN NOT NULL DEFAULT false;`
   },
   {
+    name: '018_commission_fields',
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_type VARCHAR(20) NOT NULL DEFAULT 'none';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_value NUMERIC(10,2) NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_online_payments BOOLEAN NOT NULL DEFAULT false;
+    `
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (

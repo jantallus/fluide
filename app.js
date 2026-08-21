@@ -48,6 +48,7 @@ app.use('/', require('./routes/planning'));
 app.use('/', require('./routes/giftCards'));
 app.use('/', require('./routes/partners'));
 app.use('/', require('./routes/admin'));
+app.use('/', require('./routes/regularisation'));
 app.use('/', require('./routes/public'));
 
 app.use(sentryErrorMiddleware);

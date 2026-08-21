@@ -9,26 +9,26 @@ const { CreateUserSchema, UpdateUserSchema } = require('../schemas');
 
 router.get('/api/users', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query('SELECT id, first_name, email, role, is_active_monitor, google_sync_enabled, status FROM users ORDER BY first_name ASC');
+    const r = await pool.query('SELECT id, first_name, email, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users ORDER BY first_name ASC');
     res.json(r.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/api/users', authenticateAdmin, validate(CreateUserSchema), async (req, res) => {
-  const { first_name, email, password, role, is_active_monitor, google_sync_enabled, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
+  const { first_name, email, password, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, google_sync_enabled, status, available_start_date, available_end_date, daily_start_time, daily_end_time)
-       VALUES ($1, $2, $3, $4, $5, $6, 'Actif', $7, $8, $9, $10) RETURNING id, first_name, role`,
-      [first_name, email, hash, role, is_active_monitor, google_sync_enabled ?? false, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null]
+      `INSERT INTO users (first_name, email, password_hash, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, available_start_date, available_end_date, daily_start_time, daily_end_time)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Actif', $10, $11, $12, $13) RETURNING id, first_name, role`,
+      [first_name, email, hash, role, is_active_monitor, google_sync_enabled ?? false, receives_online_payments ?? false, commission_type || 'none', commission_value || 0, available_start_date || null, available_end_date || null, daily_start_time || null, daily_end_time || null]
     );
     res.json(r.rows[0]);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), async (req, res) => {
-  const { first_name, email, role, is_active_monitor, google_sync_enabled, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
+  const { first_name, email, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     if (req.user.role !== 'admin' && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
@@ -37,12 +37,18 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     let finalRole = role;
     let finalActive = is_active_monitor;
     let finalGoogleSync = google_sync_enabled;
+    let finalOnline = receives_online_payments;
+    let finalCommType = commission_type;
+    let finalCommValue = commission_value;
     let finalStatus = status;
     if (req.user.role !== 'admin') {
-      const check = await pool.query('SELECT role, is_active_monitor, google_sync_enabled, status FROM users WHERE id=$1', [req.params.id]);
+      const check = await pool.query('SELECT role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users WHERE id=$1', [req.params.id]);
       finalRole = check.rows[0].role;
       finalActive = check.rows[0].is_active_monitor;
       finalGoogleSync = check.rows[0].google_sync_enabled;
+      finalOnline = check.rows[0].receives_online_payments;
+      finalCommType = check.rows[0].commission_type;
+      finalCommValue = check.rows[0].commission_value;
       finalStatus = check.rows[0].status;
     }
 
@@ -54,13 +60,13 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     if (password) {
        const hash = await bcrypt.hash(password, 10);
        await pool.query(
-         'UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, google_sync_enabled = $5, status = $6, password_hash = $7, available_start_date = $8, available_end_date = $9, daily_start_time = $10, daily_end_time = $11 WHERE id = $12',
-         [first_name, email, finalRole, finalActive, finalGoogleSync, finalStatus, hash, startD, endD, startT, endT, req.params.id]
+         'UPDATE users SET first_name=$1, email=$2, role=$3, is_active_monitor=$4, google_sync_enabled=$5, receives_online_payments=$6, commission_type=$7, commission_value=$8, status=$9, password_hash=$10, available_start_date=$11, available_end_date=$12, daily_start_time=$13, daily_end_time=$14 WHERE id=$15',
+         [first_name, email, finalRole, finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, hash, startD, endD, startT, endT, req.params.id]
        );
     } else {
        await pool.query(
-         'UPDATE users SET first_name = $1, email = $2, role = $3, is_active_monitor = $4, google_sync_enabled = $5, status = $6, available_start_date = $7, available_end_date = $8, daily_start_time = $9, daily_end_time = $10 WHERE id = $11',
-         [first_name, email, finalRole, finalActive, finalGoogleSync, finalStatus, startD, endD, startT, endT, req.params.id]
+         'UPDATE users SET first_name=$1, email=$2, role=$3, is_active_monitor=$4, google_sync_enabled=$5, receives_online_payments=$6, commission_type=$7, commission_value=$8, status=$9, available_start_date=$10, available_end_date=$11, daily_start_time=$12, daily_end_time=$13 WHERE id=$14',
+         [first_name, email, finalRole, finalActive, finalGoogleSync, finalOnline, finalCommType || 'none', finalCommValue ?? 0, finalStatus, startD, endD, startT, endT, req.params.id]
        );
     }
     res.json({ success: true });
