@@ -36,7 +36,7 @@ async function runBackgroundGoogleSync() {
         }
         if (!Array.isArray(slots)) continue;
         googleSyncCache.set(mon.id, slots);
-        console.log(`✅ Sync Google ${mon.first_name} : ${slots.length} événement(s)`);
+        console.log(`✅ Sync Google ${mon.first_name} : ${slots.length} événement(s)`, slots.map(g => new Date(g.start).toISOString()));
 
         // Recréer les événements Fluide supprimés de Google Calendar
         const bookedRes = await pool.query(
@@ -49,10 +49,12 @@ async function runBackgroundGoogleSync() {
              AND payment_data->>'google_synced' = 'true'`,
           [mon.id]
         );
+        console.log(`🔍 ${mon.first_name} : ${bookedRes.rows.length} créneau(x) google_synced à vérifier`);
         for (const slot of bookedRes.rows) {
           const slotStart = new Date(slot.start_time).getTime();
           const slotEnd   = new Date(slot.end_time).getTime();
           const hasEvent  = slots.some(g => g.start < slotEnd && g.end > slotStart);
+          console.log(`  → ${slot.title} @ ${new Date(slot.start_time).toISOString()} : hasEvent=${hasEvent}`);
           if (!hasEvent) {
             console.log(`🔄 Recréation Google Calendar : ${slot.title} @ ${new Date(slot.start_time).toISOString()}`);
             const desc = [
