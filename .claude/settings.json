@@ -5,7 +5,8 @@
       "Bash(node -e \"require\\('./services/googleSync'\\)\")",
       "Bash(node --check services/googleSync.js)",
       "Bash(node --check services/booking.js)",
-      "Bash(node --check routes/planning.js)"
+      "Bash(node --check routes/planning.js)",
+      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -30\")"
     ]
   }
 }

@@ -131,6 +131,13 @@ const migrations = [
     `
   },
   {
+    name: '019_partners_commission',
+    sql: `
+      ALTER TABLE partners ADD COLUMN IF NOT EXISTS commission_type VARCHAR(20) NOT NULL DEFAULT 'none';
+      ALTER TABLE partners ADD COLUMN IF NOT EXISTS commission_value NUMERIC(10,2) NOT NULL DEFAULT 0;
+    `
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
