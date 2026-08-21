@@ -208,6 +208,10 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
             if (updatedSlot.client_message) desc += `Message client: ${updatedSlot.client_message}\n`;
 
             notifyGoogleCalendar(monitorName, updatedSlot.title, updatedSlot.start_time, updatedSlot.end_time, desc);
+            await pool.query(
+              `UPDATE slots SET payment_data = COALESCE(payment_data, '{}') || '{"google_synced": true}'::jsonb WHERE id = $1`,
+              [updatedSlot.id]
+            );
           }
         }
       } catch(e) { console.error("Erreur Synchro Google Admin:", e); }
