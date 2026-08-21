@@ -6,7 +6,10 @@
       "Bash(node --check services/googleSync.js)",
       "Bash(node --check services/booking.js)",
       "Bash(node --check routes/planning.js)",
-      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -30\")"
+      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -30\")",
+      "Bash(bash -c 'node -e \" *)",
+      "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, title, start_time, payment_data FROM slots WHERE start_time::date = \\\\x272026-08-24\\\\x27 AND start_time::time = \\\\x2714:25:00\\\\x27\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
+      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -20\")"
     ]
   }
 }
