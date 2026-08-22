@@ -11,14 +11,14 @@ router.get('/api/partners', authenticateAdmin, async (req, res) => {
 });
 
 router.post('/api/partners', authenticateAdmin, async (req, res) => {
-  const { name, code, color_code, booking_fields, commission_type, commission_value } = req.body;
+  const { name, code, color_code, booking_fields, commission_type, commission_value, facturable } = req.body;
   if (!name?.trim() || !code?.trim()) return res.status(400).json({ error: 'Nom et code requis' });
   try {
     const { rows } = await pool.query(
-      `INSERT INTO partners (name, code, color_code, booking_fields, commission_type, commission_value)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO partners (name, code, color_code, booking_fields, commission_type, commission_value, facturable)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [name.trim(), code.trim().toUpperCase(), color_code || '#6366f1', JSON.stringify(booking_fields || {}),
-       commission_type || 'none', commission_value ?? 0]
+       commission_type || 'none', commission_value ?? 0, facturable ?? true]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -28,14 +28,14 @@ router.post('/api/partners', authenticateAdmin, async (req, res) => {
 });
 
 router.put('/api/partners/:id', authenticateAdmin, async (req, res) => {
-  const { name, code, color_code, booking_fields, is_active, commission_type, commission_value } = req.body;
+  const { name, code, color_code, booking_fields, is_active, commission_type, commission_value, facturable } = req.body;
   try {
     const { rows } = await pool.query(
       `UPDATE partners SET name=$1, code=$2, color_code=$3, booking_fields=$4, is_active=$5,
-                           commission_type=$6, commission_value=$7
-       WHERE id=$8 RETURNING *`,
+                           commission_type=$6, commission_value=$7, facturable=$8
+       WHERE id=$9 RETURNING *`,
       [name.trim(), code.trim().toUpperCase(), color_code || '#6366f1', JSON.stringify(booking_fields || {}),
-       is_active ?? true, commission_type || 'none', commission_value ?? 0, req.params.id]
+       is_active ?? true, commission_type || 'none', commission_value ?? 0, facturable ?? true, req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Partenaire introuvable' });
     res.json(rows[0]);

@@ -138,6 +138,12 @@ const migrations = [
     `
   },
   {
+    name: '020_partners_facturable',
+    sql: `
+      ALTER TABLE partners ADD COLUMN IF NOT EXISTS facturable BOOLEAN NOT NULL DEFAULT true;
+    `
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
