@@ -13,7 +13,8 @@
       "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, title, start_time, payment_data FROM slots WHERE start_time::date = \\\\x272026-08-23\\\\x27 AND start_time::time = \\\\x2710:05:00\\\\x27\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
       "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, first_name, last_name, email, phone FROM clients WHERE LOWER\\(first_name\\) LIKE \\\\x27%damien%\\\\x27 OR LOWER\\(last_name\\) LIKE \\\\x27%delarche%\\\\x27\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
       "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, title, start_time, phone, email, billing_name FROM slots WHERE id IN \\(17148, 17149\\)\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
-      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -10\")"
+      "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -10\")",
+      "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, payment_data FROM slots WHERE payment_data->>'\\\\''payment_type'\\\\'' IS NOT NULL AND payment_data->>'\\\\''payment_type'\\\\'' NOT IN \\('\\\\''np'\\\\'', '\\\\''online'\\\\'', '\\\\''bon_cadeau'\\\\'', '\\\\''esp'\\\\''\\) LIMIT 10\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')"
     ]
   }
 }
