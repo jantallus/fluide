@@ -15,7 +15,9 @@
       "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, title, start_time, phone, email, billing_name FROM slots WHERE id IN \\(17148, 17149\\)\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
       "Bash(bash -c \"cd /home/juwirtz/fluide-frontend && npx tsc --noEmit 2>&1 | head -10\")",
       "Bash(bash -c 'node -e \"const { pool } = require\\(\\\\\"./db\\\\\"\\); pool.query\\(\\\\\"SELECT id, payment_data FROM slots WHERE payment_data->>'\\\\''payment_type'\\\\'' IS NOT NULL AND payment_data->>'\\\\''payment_type'\\\\'' NOT IN \\('\\\\''np'\\\\'', '\\\\''online'\\\\'', '\\\\''bon_cadeau'\\\\'', '\\\\''esp'\\\\''\\) LIMIT 10\\\\\"\\).then\\(r => { console.log\\(JSON.stringify\\(r.rows, null, 2\\)\\); pool.end\\(\\); }\\);\"')",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(netstat -tlnp)",
+      "Read(//home/juwirtz/**)"
     ]
   }
 }
