@@ -143,17 +143,28 @@ async function processStripeSession(session) {
     const passengers = JSON.parse(passengersJson);
 
     const voucherCode = session.metadata.voucher_code;
+    const voucherType = session.metadata.voucher_type || 'promo';
     const pData = {
       online: true,
       cb: session.amount_total || 0,
       ...(voucherCode
         ? {
             code: voucherCode,
-            code_type: session.metadata.voucher_type || 'promo',
+            code_type: voucherType,
             voucher: parseInt(session.metadata.voucher_discount_cents || '0'),
           }
         : {}),
     };
+
+    // Attribuer l'encaisseur : pilote du bon cadeau ou pilote configuré pour les paiements en ligne
+    if (voucherCode && voucherType === 'gift_card') {
+      const gcRes = await client.query('SELECT monitor_id FROM gift_cards WHERE UPPER(code) = UPPER($1)', [voucherCode]);
+      if (gcRes.rows[0]?.monitor_id) pData.encaisseur_id = gcRes.rows[0].monitor_id;
+    }
+    if (!pData.encaisseur_id) {
+      const onlineRes = await client.query('SELECT id FROM users WHERE receives_online_payments = true LIMIT 1');
+      if (onlineRes.rows[0]) pData.encaisseur_id = onlineRes.rows[0].id;
+    }
 
     try {
       await performBooking(client, contact, passengers, pData, billingInfo);

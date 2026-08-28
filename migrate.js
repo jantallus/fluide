@@ -144,6 +144,10 @@ const migrations = [
     `
   },
   {
+    name: '021_gift_cards_monitor_id',
+    sql: `ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS monitor_id UUID REFERENCES users(id) ON DELETE SET NULL;`
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (

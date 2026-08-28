@@ -88,7 +88,7 @@ router.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res
 
 router.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
   try {
-    const r = await pool.query(`SELECT gc.*, ft.name as flight_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id ORDER BY gc.created_at DESC`);
+    const r = await pool.query(`SELECT gc.*, ft.name as flight_name, u.first_name as monitor_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id LEFT JOIN users u ON gc.monitor_id = u.id ORDER BY gc.created_at DESC`);
     res.json(r.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
@@ -96,13 +96,13 @@ router.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
 // 🎯 1. CRÉATION D'UN CODE
 // 🎯 1. CRÉATION D'UN CODE
 router.post('/api/gift-cards', authenticateAdmin, validate(CreateGiftCardSchema), async (req, res) => {
-  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, custom_code, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents, partner_billing_type } = req.body;
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, custom_code, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents, partner_billing_type, monitor_id } = req.body;
   try {
     const finalCode = custom_code ? custom_code.toUpperCase().replace(/\s+/g, '-') : `FLUIDE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
     const r = await pool.query(
-      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, max_uses, valid_from, valid_until, status, discount_scope, is_partner, partner_amount_cents, partner_billing_type) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'valid', $13, $14, $15, $16) RETURNING *`,
-      [finalCode, flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', type || 'gift_card', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, partner_billing_type || 'fixed']
+      `INSERT INTO gift_cards (code, flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, type, discount_type, discount_value, max_uses, valid_from, valid_until, status, discount_scope, is_partner, partner_amount_cents, partner_billing_type, monitor_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'valid', $13, $14, $15, $16, $17) RETURNING *`,
+      [finalCode, flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', type || 'gift_card', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, partner_billing_type || 'fixed', monitor_id || null]
     );
     res.json(r.rows[0]);
   } catch (err) {
@@ -113,11 +113,11 @@ router.post('/api/gift-cards', authenticateAdmin, validate(CreateGiftCardSchema)
 
 // 🎯 2. MODIFICATION D'UN CODE
 router.put('/api/gift-cards/:id', authenticateAdmin, async (req, res) => {
-  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, discount_type, discount_value, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents, partner_billing_type } = req.body;
+  const { flight_type_id, buyer_name, beneficiary_name, price_paid_cents, notes, discount_type, discount_value, max_uses, valid_from, valid_until, discount_scope, is_partner, partner_amount_cents, partner_billing_type, monitor_id } = req.body;
   try {
     await pool.query(
-      `UPDATE gift_cards SET flight_type_id = $1, buyer_name = $2, beneficiary_name = $3, price_paid_cents = $4, notes = $5, discount_type = $6, discount_value = $7, max_uses = $8, valid_from = $9, valid_until = $10, discount_scope = $11, is_partner = $12, partner_amount_cents = $13, partner_billing_type = $14 WHERE id = $15`,
-      [flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, partner_billing_type || 'fixed', req.params.id]
+      `UPDATE gift_cards SET flight_type_id = $1, buyer_name = $2, beneficiary_name = $3, price_paid_cents = $4, notes = $5, discount_type = $6, discount_value = $7, max_uses = $8, valid_from = $9, valid_until = $10, discount_scope = $11, is_partner = $12, partner_amount_cents = $13, partner_billing_type = $14, monitor_id = $15 WHERE id = $16`,
+      [flight_type_id || null, buyer_name || null, beneficiary_name || null, price_paid_cents || 0, notes || '', discount_type || null, discount_value || null, max_uses || null, valid_from || null, valid_until || null, discount_scope || 'both', is_partner || false, partner_amount_cents || null, partner_billing_type || 'fixed', monitor_id || null, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

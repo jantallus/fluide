@@ -57,6 +57,11 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     const startT = daily_start_time || null;
     const endT = daily_end_time || null;
 
+    // Un seul pilote peut recevoir les paiements en ligne
+    if (finalOnline === true) {
+      await pool.query('UPDATE users SET receives_online_payments = false WHERE id != $1', [req.params.id]);
+    }
+
     if (password) {
        const hash = await bcrypt.hash(password, 10);
        await pool.query(
