@@ -109,11 +109,13 @@ router.put('/api/users/:id/availabilities', authenticateUser, async (req, res) =
 router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     let query = `
-      SELECT id, first_name, email, role, is_active_monitor, status, 
+      SELECT id, first_name, email, role, is_active_monitor, status,
+             google_sync_enabled, receives_online_payments,
+             commission_type, commission_value,
              TO_CHAR(available_start_date, 'YYYY-MM-DD') as available_start_date,
              TO_CHAR(available_end_date, 'YYYY-MM-DD') as available_end_date,
-             daily_start_time, daily_end_time 
-      FROM users 
+             daily_start_time, daily_end_time
+      FROM users
       WHERE LOWER(role) IN ('admin', 'permanent', 'monitor') 
     `;
     let params = [];
