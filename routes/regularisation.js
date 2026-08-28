@@ -16,6 +16,10 @@ router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
     const { from, to } = req.query;
     if (!from || !to) return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD)' });
 
+    // Pilote configuré pour recevoir les paiements en ligne (fallback encaisseur)
+    const onlinePayRes = await pool.query('SELECT id FROM users WHERE receives_online_payments = true LIMIT 1');
+    const onlinePayPilotId = onlinePayRes.rows[0]?.id || null;
+
     const { rows } = await pool.query(
       `SELECT
          s.id,
@@ -67,6 +71,12 @@ router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
         byMonitor[mid].commission_value
       );
 
+      // Pour les paiements en ligne sans encaisseur_id explicite, utiliser le pilote en ligne
+      let encaisseurId = pd.encaisseur_id || null;
+      if (!encaisseurId && (pd.online === true || paymentType === 'online') && onlinePayPilotId) {
+        encaisseurId = onlinePayPilotId;
+      }
+
       byMonitor[mid].flights.push({
         id: row.id,
         date: row.start_time,
@@ -74,7 +84,7 @@ router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
         flight_name: row.flight_name || null,
         price_euros: priceEuros,
         payment_type: paymentType,
-        encaisseur_id: pd.encaisseur_id || null,
+        encaisseur_id: encaisseurId,
         commission,
       });
     }
