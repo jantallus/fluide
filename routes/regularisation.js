@@ -62,7 +62,8 @@ router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
         };
       }
 
-      const priceEuros = (row.price_cents || 0) / 100;
+      const flightPriceCents = pd.price_override_cents != null ? pd.price_override_cents : (row.price_cents || 0);
+      const priceEuros = (flightPriceCents + (pd.complement_total_cents || 0)) / 100;
       const pd = row.payment_data || {};
       const paymentType = pd.payment_type || null;
       const commission = computeCommission(
