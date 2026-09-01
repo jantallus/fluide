@@ -147,6 +147,7 @@ async function processStripeSession(session) {
     const pData = {
       online: true,
       cb: session.amount_total || 0,
+      stripe_session_id: session.id,
       ...(voucherCode
         ? {
             code: voucherCode,
