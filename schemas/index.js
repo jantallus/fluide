@@ -155,9 +155,10 @@ const CreateGiftCardSchema = z.object({
 // ── PLANNING : Patch quick ────────────────────────────────────────────────────
 
 const QuickPatchSchema = z.object({
-  payment_data:  z.record(z.unknown()).optional(),
-  monitor_id:    z.union([z.number().int().positive(), z.string(), z.null()]).optional(),
-  billing_name:  z.string().max(200).trim().optional().nullable(),
+  payment_data:    z.record(z.unknown()).optional(),
+  monitor_id:      z.union([z.number().int().positive(), z.string(), z.null()]).optional(),
+  billing_name:    z.string().max(200).trim().optional().nullable(),
+  booking_options: z.string().max(500).optional().nullable(),
 }).strict(); // Interdit les champs non déclarés
 
 

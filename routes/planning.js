@@ -226,7 +226,7 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
 });
 
 router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema), async (req, res) => {
-  const { payment_data, monitor_id, billing_name } = req.body;
+  const { payment_data, monitor_id, billing_name, booking_options } = req.body;
   const client = await pool.connect();
 
   try {
@@ -237,6 +237,9 @@ router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema
 
     if (payment_data !== undefined) {
       await client.query('UPDATE slots SET payment_data = $1 WHERE id = $2', [payment_data ? JSON.stringify(payment_data) : null, req.params.id]);
+    }
+    if (booking_options !== undefined) {
+      await client.query('UPDATE slots SET booking_options = $1 WHERE id = $2', [booking_options || null, req.params.id]);
     }
 
     if (billing_name !== undefined) {
