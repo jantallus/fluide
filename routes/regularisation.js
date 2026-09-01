@@ -86,6 +86,8 @@ router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
         payment_type: paymentType,
         encaisseur_id: encaisseurId,
         commission,
+        stripe_fee_cents: pd.stripe_fee_cents ?? null,
+        stripe_net_cents: pd.stripe_net_cents ?? null,
       });
     }
 
