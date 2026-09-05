@@ -148,6 +148,17 @@ const migrations = [
     sql: `ALTER TABLE gift_cards ADD COLUMN IF NOT EXISTS monitor_id UUID REFERENCES users(id) ON DELETE SET NULL;`
   },
   {
+    name: '022_partner_flight_types',
+    sql: `
+      CREATE TABLE IF NOT EXISTS partner_flight_types (
+        partner_id     INTEGER NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+        flight_type_id INTEGER NOT NULL REFERENCES flight_types(id) ON DELETE CASCADE,
+        base_price_cents INTEGER,
+        PRIMARY KEY (partner_id, flight_type_id)
+      );
+    `
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
