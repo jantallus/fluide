@@ -159,6 +159,31 @@ const migrations = [
     `
   },
   {
+    name: '023_standby_clients',
+    sql: `
+      CREATE TABLE IF NOT EXISTS standby_clients (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255),
+        phone VARCHAR(50),
+        email VARCHAR(255),
+        nb_passengers INTEGER DEFAULT 1,
+        flight_type VARCHAR(100),
+        weight_info VARCHAR(200),
+        availability_text TEXT,
+        availability_start DATE,
+        availability_end DATE,
+        notes TEXT,
+        pilot_name VARCHAR(255),
+        booked_date DATE,
+        booked_time VARCHAR(10),
+        slot_id INTEGER,
+        status VARCHAR(20) DEFAULT 'pending',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
