@@ -1,6 +1,10 @@
 // db.js — Pool de connexion unique partagé dans toute l'application
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 require('dotenv').config();
+
+// Force les colonnes DATE (OID 1082) à rester des strings "YYYY-MM-DD"
+// plutôt que d'être converties en objets Date JavaScript (source de bugs timezone).
+types.setTypeParser(1082, val => val);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
