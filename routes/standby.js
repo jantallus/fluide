@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { authenticateAdminOrPartnerOrPartner } = require('../middleware/auth');
+const { authenticateAdminOrPartner } = require('../middleware/auth');
 
 router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   try {
