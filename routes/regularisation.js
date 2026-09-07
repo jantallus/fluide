@@ -78,17 +78,24 @@ router.get('/api/regularisation', authenticateAdminOrPartner, async (req, res) =
         encaisseurId = onlinePayPilotId;
       }
 
+      const cbNetCents = pd.cb_net_cents ?? null;
+      const effectivePriceEuros = (paymentType === 'cb' && cbNetCents != null)
+        ? cbNetCents / 100
+        : priceEuros;
+
       byMonitor[mid].flights.push({
         id: row.id,
         date: row.start_time,
         title: row.title,
         flight_name: row.flight_name || null,
         price_euros: priceEuros,
+        effective_price_euros: effectivePriceEuros,
         payment_type: paymentType,
         encaisseur_id: encaisseurId,
         commission,
         stripe_fee_cents: pd.stripe_fee_cents ?? null,
         stripe_net_cents: pd.stripe_net_cents ?? null,
+        cb_net_cents: cbNetCents,
       });
     }
 
