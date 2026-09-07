@@ -4,7 +4,7 @@ const db = require('../db');
 const { pool } = db;
 const { authenticateUser, authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 
-router.get('/api/clients', authenticateAdmin, async (req, res) => {
+router.get('/api/clients', authenticateAdminOrPartner, async (req, res) => {
   const q      = (req.query.q || '').trim();
   const page   = Math.max(1, parseInt(req.query.page)  || 1);
   const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit) || 30));

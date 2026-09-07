@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { authenticateAdmin } = require('../middleware/auth');
+const { authenticateAdminOrPartnerOrPartner } = require('../middleware/auth');
 
-router.get('/api/standby', authenticateAdmin, async (req, res) => {
+router.get('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT * FROM standby_clients ORDER BY
@@ -15,7 +15,7 @@ router.get('/api/standby', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/standby', authenticateAdmin, async (req, res) => {
+router.post('/api/standby', authenticateAdminOrPartner, async (req, res) => {
   const { name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes } = req.body;
   try {
     const { rows } = await pool.query(
@@ -28,7 +28,7 @@ router.post('/api/standby', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.put('/api/standby/:id', authenticateAdmin, async (req, res) => {
+router.put('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   const { name, phone, email, nb_passengers, flight_type, weight_info, availability_text, availability_start, availability_end, notes, pilot_name, booked_date, booked_time, slot_id, status } = req.body;
   try {
     const { rows } = await pool.query(
@@ -48,7 +48,7 @@ router.put('/api/standby/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.delete('/api/standby/:id', authenticateAdmin, async (req, res) => {
+router.delete('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   try {
     await pool.query('DELETE FROM standby_clients WHERE id=$1', [req.params.id]);
     res.json({ success: true });

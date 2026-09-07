@@ -3,18 +3,18 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const db = require('../db');
 const { pool } = db;
-const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { authenticateUser, authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { CreateUserSchema, UpdateUserSchema } = require('../schemas');
 
-router.get('/api/users', authenticateAdmin, async (req, res) => {
+router.get('/api/users', authenticateAdminOrPartner, async (req, res) => {
   try {
     const r = await pool.query('SELECT id, first_name, email, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users ORDER BY first_name ASC');
     res.json(r.rows);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/users', authenticateAdmin, validate(CreateUserSchema), async (req, res) => {
+router.post('/api/users', authenticateAdminOrPartner, validate(CreateUserSchema), async (req, res) => {
   const { first_name, email, password, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
     const hash = await bcrypt.hash(password, 10);
@@ -30,7 +30,7 @@ router.post('/api/users', authenticateAdmin, validate(CreateUserSchema), async (
 router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), async (req, res) => {
   const { first_name, email, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
-    if (req.user.role !== 'admin' && req.user.id !== parseInt(req.params.id)) {
+    if (!['admin', 'aravis'].includes(req.user.role) && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
     }
 
@@ -41,7 +41,7 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     let finalCommType = commission_type;
     let finalCommValue = commission_value;
     let finalStatus = status;
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'aravis'].includes(req.user.role)) {
       const check = await pool.query('SELECT role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users WHERE id=$1', [req.params.id]);
       finalRole = check.rows[0].role;
       finalActive = check.rows[0].is_active_monitor;
@@ -78,7 +78,7 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.delete('/api/users/:id', authenticateAdmin, async (req, res) => {
+router.delete('/api/users/:id', authenticateAdminOrPartner, async (req, res) => {
   try {
     if (req.user && req.user.id === req.params.id) return res.status(400).json({ error: "Interdit de supprimer son propre compte." });
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);

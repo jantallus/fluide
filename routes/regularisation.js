@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { authenticateAdmin } = require('../middleware/auth');
+const { authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 
 const ONLINE_TYPES = new Set(['cb', 'ancv', 'ancv_connect', 'chq', 'bon_cadeau', 'online']);
 
@@ -11,7 +11,7 @@ function computeCommission(priceEuros, commissionType, commissionValue) {
   return 0;
 }
 
-router.get('/api/regularisation', authenticateAdmin, async (req, res) => {
+router.get('/api/regularisation', authenticateAdminOrPartner, async (req, res) => {
   try {
     const { from, to } = req.query;
     if (!from || !to) return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD)' });
