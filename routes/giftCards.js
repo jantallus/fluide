@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { pool } = db;
-const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { authenticateUser, authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { CreateGiftCardSchema } = require('../schemas');
 const rateLimit = require('express-rate-limit');
@@ -86,7 +86,7 @@ router.delete('/api/gift-card-templates/:id', authenticateAdmin, async (req, res
 });
 
 
-router.get('/api/gift-cards', authenticateAdmin, async (req, res) => {
+router.get('/api/gift-cards', authenticateAdminOrPartner, async (req, res) => {
   try {
     const r = await pool.query(`SELECT gc.*, ft.name as flight_name, u.first_name as monitor_name FROM gift_cards gc LEFT JOIN flight_types ft ON gc.flight_type_id = ft.id LEFT JOIN users u ON gc.monitor_id = u.id ORDER BY gc.created_at DESC`);
     res.json(r.rows);
