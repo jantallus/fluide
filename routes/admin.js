@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { pool } = db;
-const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { authenticateUser, authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 
 router.get('/api/clients', authenticateAdmin, async (req, res) => {
   const q      = (req.query.q || '').trim();
@@ -76,7 +76,7 @@ router.get('/api/dashboard-stats', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.get('/api/settings', authenticateAdmin, async (req, res) => {
+router.get('/api/settings', authenticateAdminOrPartner, async (req, res) => {
   try {
     const r = await pool.query('SELECT key, value FROM site_settings');
     res.json(r.rows);

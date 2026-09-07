@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { pool } = db;
-const { authenticateUser, authenticateAdmin } = require('../middleware/auth');
+const { authenticateUser, authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { QuickPatchSchema } = require('../schemas');
 const { googleSyncCache, invalidateCacheForMonitor } = require('../services/googleSync');
@@ -283,7 +283,7 @@ router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema
   }
 });
 
-router.post('/api/delete-slots', authenticateAdmin, async (req, res) => {
+router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) => {
   const { startDate, endDate, monitor_id, forceOverwrite } = req.body;
   if (!startDate || !endDate) return res.status(400).json({ error: 'Dates manquantes.' });
 
@@ -325,7 +325,7 @@ router.post('/api/delete-slots', authenticateAdmin, async (req, res) => {
   }
 });
 
-router.post('/api/generate-slots', authenticateAdmin, async (req, res) => {
+router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) => {
   const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
   const client = await pool.connect();
