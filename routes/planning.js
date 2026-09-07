@@ -434,7 +434,7 @@ router.get('/api/slot-definitions', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
+router.post('/api/slot-definitions', authenticateAdminOrPartner, async (req, res) => {
   try {
     const { start_time, duration_minutes, label, plan_name } = req.body;
     const r = await pool.query(
@@ -445,7 +445,7 @@ router.post('/api/slot-definitions', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+router.put('/api/slot-definitions/:id', authenticateAdminOrPartner, async (req, res) => {
   const { start_time, duration_minutes, label, plan_name } = req.body;
   try {
     await pool.query('UPDATE slot_definitions SET start_time = $1, duration_minutes = $2, label = $3, plan_name = $4 WHERE id = $5', [start_time, duration_minutes, label, plan_name || 'Standard', req.params.id]);
@@ -453,21 +453,21 @@ router.put('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.delete('/api/slot-definitions/:id', authenticateAdmin, async (req, res) => {
+router.delete('/api/slot-definitions/:id', authenticateAdminOrPartner, async (req, res) => {
   try {
     await pool.query('DELETE FROM slot_definitions WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.put('/api/plans/:oldName', authenticateAdmin, async (req, res) => {
+router.put('/api/plans/:oldName', authenticateAdminOrPartner, async (req, res) => {
   try {
     await pool.query('UPDATE slot_definitions SET plan_name = $1 WHERE plan_name = $2', [req.body.newName, req.params.oldName]);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.delete('/api/plans/:name', authenticateAdmin, async (req, res) => {
+router.delete('/api/plans/:name', authenticateAdminOrPartner, async (req, res) => {
   try {
     await pool.query('DELETE FROM slot_definitions WHERE plan_name = $1', [req.params.name]);
     res.json({ success: true });

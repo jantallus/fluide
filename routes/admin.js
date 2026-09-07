@@ -83,7 +83,7 @@ router.get('/api/settings', authenticateAdminOrPartner, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
-router.post('/api/settings', authenticateAdmin, async (req, res) => {
+router.post('/api/settings', authenticateAdminOrPartner, async (req, res) => {
   const { key, value } = req.body;
   try {
     await pool.query(`INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, value]);
