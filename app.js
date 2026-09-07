@@ -22,6 +22,8 @@ app.use(cors({
       'https://fluide-frontend-production.up.railway.app',
       process.env.FRONTEND_URL,
       process.env.WORDPRESS_URL,
+      'https://aravis-parapente.com',
+      'https://www.aravis-parapente.com',
     ].filter(Boolean); // élimine les undefined/null quand une variable d'env n'est pas définie
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);

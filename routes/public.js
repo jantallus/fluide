@@ -588,4 +588,135 @@ router.get('/api/ical/:id', async (req, res) => {
 });
 
 
+// ── Créneaux disponibles Aravis (remplace Firebase côté lecture) ──────────────
+// Retourne { "YYYY-MM-DD": ["HH:MM", ...], ... } — même logique de filtres que
+// /api/public/availabilities (périodes moniteur + Google Calendar sync).
+
+router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD).' });
+
+  try {
+    const { rows: rawSlots } = await pool.query(
+      `SELECT id, start_time, end_time, status, monitor_id
+       FROM slots
+       WHERE status = 'available'
+         AND start_time::date >= $1
+         AND start_time::date <= $2
+       ORDER BY start_time ASC`,
+      [from, to]
+    );
+
+    // Périodes de disponibilité par moniteur
+    const monitorIds = [...new Set(rawSlots.map(s => s.monitor_id).filter(Boolean))];
+    const monitorAvailMap = {};
+    if (monitorIds.length > 0) {
+      const { rows: avRows } = await pool.query(
+        `SELECT user_id,
+                TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,
+                TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date
+         FROM monitor_availabilities WHERE user_id = ANY($1)`,
+        [monitorIds]
+      );
+      for (const row of avRows) {
+        if (!monitorAvailMap[row.user_id]) monitorAvailMap[row.user_id] = [];
+        monitorAvailMap[row.user_id].push(row);
+      }
+    }
+
+    // Google Calendar sync
+    const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+    const isGoogleSyncEnabled = syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true';
+
+    const grouped = {};
+    for (const slot of rawSlots) {
+      const slotStart = new Date(slot.start_time);
+      const dateStr = slotStart.toISOString().slice(0, 10);
+      const timeStr = slotStart.toISOString().slice(11, 16);
+
+      // Filtre période moniteur
+      const periods = monitorAvailMap[slot.monitor_id];
+      if (periods?.length > 0) {
+        const inPeriod = periods.some(p => dateStr >= p.start_date && dateStr <= p.end_date);
+        if (!inPeriod) continue;
+      }
+
+      // Filtre Google Calendar
+      if (isGoogleSyncEnabled && slot.monitor_id) {
+        const googleBusy = googleSyncCache.get(slot.monitor_id) || [];
+        const slotEnd = new Date(slot.end_time).getTime();
+        const isBusy = googleBusy.some(g => slotStart.getTime() < g.end && slotEnd > g.start);
+        if (isBusy) continue;
+      }
+
+      if (!grouped[dateStr]) grouped[dateStr] = new Set();
+      grouped[dateStr].add(timeStr);
+    }
+
+    const result = {};
+    for (const [date, times] of Object.entries(grouped)) {
+      result[date] = [...times].sort();
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[Aravis slots]', err);
+    res.status(500).json({ error: 'Erreur serveur.' });
+  }
+});
+
+// ── Demande de vol Aravis (endpoint public, sans authentification) ────────────
+
+const aravisRequestLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: { error: 'Trop de demandes. Veuillez réessayer dans 10 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/api/public/aravis/request', aravisRequestLimiter, async (req, res) => {
+  const { name, phone, email, nb_passengers, weight_info, flight_type, requested_date, requested_time, notes } = req.body;
+
+  // Champ obligatoire minimal
+  if (!name && !phone && !email) {
+    return res.status(400).json({ error: 'Au moins un contact (nom, téléphone ou email) est requis.' });
+  }
+
+  // Texte de disponibilité lisible dans le backoffice
+  const availabilityText = requested_time || null;
+  const availabilityStart = requested_date || null;
+  const availabilityEnd = requested_date || null;
+
+  const notesWithFlight = [
+    flight_type ? `Vol souhaité : ${flight_type}` : null,
+    notes || null,
+  ].filter(Boolean).join('\n') || null;
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO standby_clients
+        (name, phone, email, nb_passengers, flight_type, weight_info,
+         availability_text, availability_start, availability_end, notes, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending') RETURNING id`,
+      [
+        name || null,
+        phone || null,
+        email || null,
+        nb_passengers || 1,
+        flight_type || null,
+        weight_info || null,
+        availabilityText,
+        availabilityStart,
+        availabilityEnd,
+        notesWithFlight,
+      ]
+    );
+    res.json({ success: true, id: rows[0].id });
+  } catch (err) {
+    console.error('[Aravis request]', err);
+    res.status(500).json({ error: 'Erreur serveur. Votre demande n\'a pas pu être enregistrée.' });
+  }
+});
+
 module.exports = router;
