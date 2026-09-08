@@ -125,7 +125,7 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
              TO_CHAR(available_end_date, 'YYYY-MM-DD') as available_end_date,
              daily_start_time, daily_end_time
       FROM users
-      WHERE LOWER(role) IN ('admin', 'permanent', 'monitor') 
+      WHERE LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis')
     `;
     let params = [];
 
@@ -134,7 +134,7 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
       params.push(req.user.id);
     }
 
-    query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 ELSE 3 END, first_name ASC`;
+    query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 WHEN role = 'aravis' THEN 3 ELSE 4 END, first_name ASC`;
     
     const r = await pool.query(query, params);
     res.json(r.rows);
@@ -144,8 +144,8 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
 router.get('/api/monitors', async (req, res) => {
   try {
     const r = await pool.query(`
-      SELECT id, first_name FROM users 
-      WHERE is_active_monitor = true AND status = 'Actif' AND LOWER(role) IN ('admin', 'permanent', 'monitor')
+      SELECT id, first_name FROM users
+      WHERE is_active_monitor = true AND status = 'Actif' AND LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis')
       ORDER BY first_name ASC
     `);
     res.json(r.rows);
