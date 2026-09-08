@@ -75,7 +75,11 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
        );
     }
     res.json({ success: true });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23505') return res.status(409).json({ error: 'Cet email est déjà utilisé par un autre compte.' });
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
 });
 
 router.delete('/api/users/:id', authenticateAdminOrPartner, async (req, res) => {
