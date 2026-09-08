@@ -15,16 +15,16 @@ app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function (origin, callback) {
+    const fromEnv = (v) => (v ? v.split(',').map(u => u.trim()) : []);
     const allowedOrigins = [
       'http://localhost:3000',
       'http://127.0.0.1:3000',
-      process.env.TAILSCALE_URL,
-      'https://fluide-frontend-production.up.railway.app',
-      process.env.FRONTEND_URL,
-      process.env.WORDPRESS_URL,
+      ...fromEnv(process.env.TAILSCALE_URL),
+      ...fromEnv(process.env.FRONTEND_URL),  // virgule-séparé : "https://admin.parabooking.app,https://old.railway.app"
+      ...fromEnv(process.env.WORDPRESS_URL),
       'https://aravis-parapente.com',
       'https://www.aravis-parapente.com',
-    ].filter(Boolean); // élimine les undefined/null quand une variable d'env n'est pas définie
+    ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
