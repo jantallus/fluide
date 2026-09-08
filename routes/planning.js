@@ -217,6 +217,16 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
       } catch(e) { console.error("Erreur Synchro Google Admin:", e); }
     }
 
+    // Auto-passage "effectué" dans la demande liée si paiement enregistré sur date passée
+    const pd = req.body.payment_data;
+    const hasPayment = pd && pd.payment_type && pd.payment_type !== '' && pd.payment_type !== 'np';
+    if (hasPayment && updatedSlot.status === 'booked' && new Date(updatedSlot.start_time) < new Date()) {
+      await pool.query(
+        `UPDATE standby_clients SET status='done', updated_at=NOW() WHERE slot_id=$1 AND status='scheduled'`,
+        [updatedSlot.id]
+      );
+    }
+
     res.json(updatedSlot);
 
   } catch (err) {

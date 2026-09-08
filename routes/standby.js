@@ -48,6 +48,21 @@ router.put('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
+router.patch('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
+  const allowed = ['status', 'slot_id', 'booked_date', 'booked_time', 'pilot_name'];
+  const updates = Object.keys(req.body).filter(k => allowed.includes(k));
+  if (updates.length === 0) return res.status(400).json({ error: 'Aucun champ valide' });
+  const set = updates.map((k, i) => `${k}=$${i + 1}`).join(', ');
+  const vals = [...updates.map(k => req.body[k] ?? null), req.params.id];
+  try {
+    const { rows } = await pool.query(
+      `UPDATE standby_clients SET ${set}, updated_at=NOW() WHERE id=$${vals.length} RETURNING *`, vals
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Introuvable' });
+    res.json(rows[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
 router.delete('/api/standby/:id', authenticateAdminOrPartner, async (req, res) => {
   try {
     await pool.query('DELETE FROM standby_clients WHERE id=$1', [req.params.id]);
