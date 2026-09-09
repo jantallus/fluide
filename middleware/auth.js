@@ -36,7 +36,7 @@ const authenticateAdminOrPartner = (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Accès refusé' });
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: 'Session invalide' });
-    if (!['admin', 'aravis'].includes(user.role)) {
+    if (!['admin', 'aravis', 'aravis_admin'].includes(user.role)) {
       return res.status(403).json({ error: 'Interdit.' });
     }
     req.user = user;
