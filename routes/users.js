@@ -30,7 +30,7 @@ router.post('/api/users', authenticateAdminOrPartner, validate(CreateUserSchema)
 router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), async (req, res) => {
   const { first_name, email, role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status, password, available_start_date, available_end_date, daily_start_time, daily_end_time } = req.body;
   try {
-    if (!['admin', 'aravis'].includes(req.user.role) && req.user.id !== parseInt(req.params.id)) {
+    if (!['admin', 'aravis', 'aravis_admin'].includes(req.user.role) && req.user.id !== parseInt(req.params.id)) {
       return res.status(403).json({ error: "Interdit : Vous ne pouvez modifier que votre propre profil." });
     }
 
@@ -41,7 +41,7 @@ router.patch('/api/users/:id', authenticateUser, validate(UpdateUserSchema), asy
     let finalCommType = commission_type;
     let finalCommValue = commission_value;
     let finalStatus = status;
-    if (!['admin', 'aravis'].includes(req.user.role)) {
+    if (!['admin', 'aravis', 'aravis_admin'].includes(req.user.role)) {
       const check = await pool.query('SELECT role, is_active_monitor, google_sync_enabled, receives_online_payments, commission_type, commission_value, status FROM users WHERE id=$1', [req.params.id]);
       finalRole = check.rows[0].role;
       finalActive = check.rows[0].is_active_monitor;
@@ -125,7 +125,7 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
              TO_CHAR(available_end_date, 'YYYY-MM-DD') as available_end_date,
              daily_start_time, daily_end_time
       FROM users
-      WHERE LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis')
+      WHERE LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis', 'aravis_admin')
     `;
     let params = [];
 
@@ -134,7 +134,7 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
       params.push(req.user.id);
     }
 
-    query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 WHEN role = 'aravis' THEN 3 ELSE 4 END, first_name ASC`;
+    query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 WHEN role IN ('aravis', 'aravis_admin') THEN 3 ELSE 4 END, first_name ASC`;
     
     const r = await pool.query(query, params);
     res.json(r.rows);
@@ -145,7 +145,7 @@ router.get('/api/monitors', async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT id, first_name FROM users
-      WHERE is_active_monitor = true AND status = 'Actif' AND LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis')
+      WHERE is_active_monitor = true AND status = 'Actif' AND LOWER(role) IN ('admin', 'permanent', 'monitor', 'aravis', 'aravis_admin')
       ORDER BY first_name ASC
     `);
     res.json(r.rows);
