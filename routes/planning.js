@@ -423,8 +423,8 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
               if (avails.rows.length > 0 && !isAuthorized) continue;
 
               const isBlocked = !isPause && blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id));
-              const slotStatus = isPause ? 'booked' : isBlocked ? 'blocked' : 'available';
-              const slotTitle = isPause ? '☕ PAUSE' : null;
+              const slotStatus = isPause || isBlocked ? 'booked' : 'available';
+              const slotTitle = isPause ? '☕ PAUSE' : isBlocked ? 'NON DISPO' : null;
               placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
               values.push(m.id, startTS, d.duration_minutes, slotStatus, slotTitle);
               paramIndex += 5; 
