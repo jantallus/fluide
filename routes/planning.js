@@ -314,7 +314,7 @@ router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) =>
       const check = await client.query(
         `SELECT COUNT(*) FROM slots
          WHERE start_time::date >= $1 AND start_time::date <= $2
-         AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE') OR (notes IS NOT NULL AND trim(notes) != ''))
+         AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE' AND UPPER(title) != 'NON DISPO') OR (notes IS NOT NULL AND trim(notes) != ''))
          ${monitorFilter}`,
         params
       );
@@ -370,7 +370,7 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
           SELECT COUNT(*) FROM slots 
           WHERE start_time::date >= $1 
           AND start_time::date <= $2 
-          AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE') OR (notes IS NOT NULL AND trim(notes) != ''))
+          AND ((title IS NOT NULL AND title != '' AND title != '☕ PAUSE' AND UPPER(title) != 'NON DISPO') OR (notes IS NOT NULL AND trim(notes) != ''))
           ${monitorFilterDelete}
         `;
         const check = await client.query(checkQuery, paramsDelete);
