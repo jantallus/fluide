@@ -336,10 +336,10 @@ router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) =>
 });
 
 router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) => {
-  const { startDate, endDate, daysToApply, plan_name, monitor_id, forceOverwrite } = req.body;
+  const { startDate, endDate, daysToApply, plan_name, monitor_id, monitor_ids, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
     let monitorFilterDelete = '';
@@ -347,7 +347,12 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
     const paramsSelect = [];
     const paramsDelete = [startDate, endDate];
 
-    if (monitor_id && monitor_id !== 'all') {
+    if (monitor_ids && monitor_ids.length > 0) {
+        monitorFilterDelete = ' AND monitor_id = ANY($3)';
+        paramsDelete.push(monitor_ids);
+        monitorFilterSelect = ' AND id = ANY($1)';
+        paramsSelect.push(monitor_ids);
+    } else if (monitor_id && monitor_id !== 'all') {
         monitorFilterDelete = ' AND monitor_id = $3';
         paramsDelete.push(monitor_id);
         monitorFilterSelect = ' AND id = $1';
