@@ -117,6 +117,48 @@ router.put('/api/users/:id/availabilities', authenticateUser, async (req, res) =
   finally { client.release(); }
 });
 
+router.post('/api/pilots/check-availability', authenticateUser, async (req, res) => {
+  const { startDate, endDate } = req.body;
+  if (!startDate || !endDate) return res.status(400).json({ error: 'startDate et endDate requis' });
+  try {
+    const r = await pool.query(`
+      SELECT u.id, u.first_name AS name,
+        COUNT(ma.id) AS total_avail,
+        COUNT(CASE WHEN ma.start_date <= $1::date AND ma.end_date >= $2::date THEN 1 END) AS covering_avail
+      FROM users u
+      LEFT JOIN monitor_availabilities ma ON ma.user_id = u.id
+      WHERE u.is_active_monitor = true AND u.status = 'Actif'
+      GROUP BY u.id, u.first_name
+      ORDER BY u.first_name ASC
+    `, [startDate, endDate]);
+    const pilots = r.rows.map(row => ({
+      id: String(row.id),
+      name: row.name,
+      hasRestrictions: parseInt(row.total_avail) > 0,
+      available: parseInt(row.total_avail) === 0 || parseInt(row.covering_avail) > 0,
+    }));
+    res.json({ pilots });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+router.post('/api/pilots/bulk-add-availability', authenticateUser, async (req, res) => {
+  const { pilotIds, startDate, endDate } = req.body;
+  if (!pilotIds?.length || !startDate || !endDate) return res.status(400).json({ error: 'Paramètres manquants' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const id of pilotIds) {
+      await client.query(
+        'INSERT INTO monitor_availabilities (user_id, start_date, end_date, daily_start_time, daily_end_time) VALUES ($1, $2, $3, $4, $5)',
+        [id, startDate, endDate, '00:00', '23:59']
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, count: pilotIds.length });
+  } catch (err) { await client.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
+  finally { client.release(); }
+});
+
 router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     let query = `
