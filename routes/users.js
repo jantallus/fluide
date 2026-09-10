@@ -124,7 +124,7 @@ router.post('/api/pilots/check-availability', authenticateUser, async (req, res)
     const r = await pool.query(`
       SELECT u.id, u.first_name AS name,
         COUNT(ma.id) AS total_avail,
-        COUNT(CASE WHEN ma.start_date <= $1::date AND ma.end_date >= $2::date THEN 1 END) AS covering_avail
+        COUNT(CASE WHEN ma.start_date <= $2::date AND ma.end_date >= $1::date THEN 1 END) AS covering_avail
       FROM users u
       LEFT JOIN monitor_availabilities ma ON ma.user_id = u.id
       WHERE u.is_active_monitor = true AND u.status = 'Actif'
