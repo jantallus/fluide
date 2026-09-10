@@ -425,7 +425,7 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
     }
 
     await client.query('COMMIT');
-    res.json({ success: true, count: placeholders.length });
+    res.json({ success: true, count: placeholders.length, debug: { monitorsFound: mons.rows.length, defsFound: defs.rows.length } });
     
   } catch (e) {
     await client.query('ROLLBACK');
