@@ -342,7 +342,7 @@ router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) =>
 });
 
 router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) => {
-  const { startDate, endDate, daysToApply, plan_name, monitor_id, monitor_ids, forceOverwrite } = req.body;
+  const { startDate, endDate, daysToApply, plan_name, monitor_id, monitor_ids, blocked_pilot_ids, forceOverwrite } = req.body;
   const plan = plan_name || 'Standard';
   const client = await pool.connect();
 
@@ -411,7 +411,7 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
           for (const m of mons.rows) {
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
-            
+
             const monitorAvails = availsByMonitor[m.id] || [];
             const avails = { rows: monitorAvails };
               const isAuthorized = avails.rows.some(a => {
@@ -421,9 +421,12 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
               });
 
               if (avails.rows.length > 0 && !isAuthorized) continue;
-              
+
+              const isBlocked = !isPause && blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id));
+              const slotStatus = isPause ? 'booked' : isBlocked ? 'blocked' : 'available';
+              const slotTitle = isPause ? '☕ PAUSE' : null;
               placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
-              values.push(m.id, startTS, d.duration_minutes, isPause ? 'booked' : 'available', isPause ? '☕ PAUSE' : null);
+              values.push(m.id, startTS, d.duration_minutes, slotStatus, slotTitle);
               paramIndex += 5; 
             }
           }
