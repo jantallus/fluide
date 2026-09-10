@@ -294,15 +294,21 @@ router.patch('/api/slots/:id/quick', authenticateUser, validate(QuickPatchSchema
 });
 
 router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) => {
-  const { startDate, endDate, monitor_id, forceOverwrite } = req.body;
+  const { startDate, endDate, monitor_id, monitor_ids, forceOverwrite } = req.body;
   if (!startDate || !endDate) return res.status(400).json({ error: 'Dates manquantes.' });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const params = [startDate, endDate];
-    const monitorFilter = (monitor_id && monitor_id !== 'all') ? ' AND monitor_id = $3' : '';
-    if (monitor_id && monitor_id !== 'all') params.push(monitor_id);
+    let monitorFilter = '';
+    if (monitor_ids && monitor_ids.length > 0) {
+      monitorFilter = ' AND monitor_id = ANY($3)';
+      params.push(monitor_ids);
+    } else if (monitor_id && monitor_id !== 'all') {
+      monitorFilter = ' AND monitor_id = $3';
+      params.push(monitor_id);
+    }
 
     if (!forceOverwrite) {
       const check = await client.query(
