@@ -121,22 +121,36 @@ router.post('/api/pilots/check-availability', authenticateUser, async (req, res)
   const { startDate, endDate } = req.body;
   if (!startDate || !endDate) return res.status(400).json({ error: 'startDate et endDate requis' });
   try {
-    const r = await pool.query(`
-      SELECT u.id, u.first_name AS name,
-        COUNT(ma.id) AS total_avail,
-        COUNT(CASE WHEN ma.start_date <= $2::date AND ma.end_date >= $1::date THEN 1 END) AS covering_avail
-      FROM users u
-      LEFT JOIN monitor_availabilities ma ON ma.user_id = u.id
-      WHERE u.is_active_monitor = true AND u.status = 'Actif'
-      GROUP BY u.id, u.first_name
-      ORDER BY u.first_name ASC
-    `, [startDate, endDate]);
-    const pilots = r.rows.map(row => ({
-      id: String(row.id),
-      name: row.name,
-      hasRestrictions: parseInt(row.total_avail) > 0,
-      available: parseInt(row.total_avail) === 0 || parseInt(row.covering_avail) > 0,
-    }));
+    const pilotsRes = await pool.query(
+      `SELECT id, first_name AS name FROM users WHERE is_active_monitor = true AND status = 'Actif' ORDER BY first_name ASC`
+    );
+    const availsRes = await pool.query(
+      `SELECT user_id, TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date, TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date FROM monitor_availabilities`
+    );
+
+    const availsByPilot = {};
+    for (const a of availsRes.rows) {
+      if (!availsByPilot[a.user_id]) availsByPilot[a.user_id] = [];
+      availsByPilot[a.user_id].push({ start: a.start_date, end: a.end_date });
+    }
+
+    // Génère tous les jours YYYY-MM-DD de la plage demandée (comparaison string, sans timezone)
+    const days = [];
+    const curr = new Date(startDate + 'T12:00:00Z');
+    const last = new Date(endDate + 'T12:00:00Z');
+    while (curr <= last) {
+      days.push(curr.toISOString().split('T')[0]);
+      curr.setUTCDate(curr.getUTCDate() + 1);
+    }
+
+    const pilots = pilotsRes.rows.map(p => {
+      const avails = availsByPilot[p.id] || [];
+      if (avails.length === 0) return { id: String(p.id), name: p.name, available: true, hasRestrictions: false };
+      // Même logique que generate-slots : chaque jour doit être couvert par au moins une dispo
+      const allCovered = days.every(day => avails.some(a => a.start <= day && a.end >= day));
+      return { id: String(p.id), name: p.name, available: allCovered, hasRestrictions: true };
+    });
+
     res.json({ pilots });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
