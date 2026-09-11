@@ -58,7 +58,7 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
     const r = await pool.query(query, params);
     let slots = r.rows;
 
-    // Filtrage par périodes de disponibilité moniteur
+    // Marquage des créneaux tombant dans une période d'indisponibilité moniteur
     const monitorIdsForAvail = [...new Set(slots.map(s => s.monitor_id).filter(Boolean))];
     if (monitorIdsForAvail.length > 0) {
       const avRes = await pool.query(
@@ -68,18 +68,18 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
          FROM monitor_availabilities WHERE user_id = ANY($1)`,
         [monitorIdsForAvail]
       );
-      const availMap = {};
+      const unavailMap = {};
       for (const row of avRes.rows) {
-        if (!availMap[row.user_id]) availMap[row.user_id] = [];
-        availMap[row.user_id].push(row);
+        if (!unavailMap[row.user_id]) unavailMap[row.user_id] = [];
+        unavailMap[row.user_id].push(row);
       }
       slots = slots.map(slot => {
         if (slot.status !== 'available' || !slot.monitor_id) return slot;
-        const periods = availMap[slot.monitor_id];
+        const periods = unavailMap[slot.monitor_id];
         if (!periods || periods.length === 0) return slot;
         const slotDateStr = new Date(slot.start_time).toISOString().slice(0, 10);
-        const inPeriod = periods.some(p => slotDateStr >= p.start_date && slotDateStr <= p.end_date);
-        if (!inPeriod) return { ...slot, status: 'booked', title: '🗓️ Hors période', notes: 'En dehors des périodes d\'activité du moniteur' };
+        const inUnavailability = periods.some(p => slotDateStr >= p.start_date && slotDateStr <= p.end_date);
+        if (inUnavailability) return { ...slot, status: 'booked', title: 'NON DISPO', notes: 'Indisponibilité du moniteur' };
         return slot;
       });
     }
@@ -418,9 +418,8 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
 
             const monitorUnavails = availsByMonitor[m.id] || [];
             const isUnavailable = !isPause && !ignoreUnavailability && monitorUnavails.some(a => {
-              const startD = new Date(a.start_date + 'T00:00:00');
-              const endD = new Date(a.end_date + 'T00:00:00');
-              return curr >= startD && curr <= endD;
+              const currStr = curr.toISOString().slice(0, 10);
+              return currStr >= a.start_date && currStr <= a.end_date;
             });
 
               const isBlocked = !isPause && (isUnavailable || (blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id))));
