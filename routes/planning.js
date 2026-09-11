@@ -450,6 +450,23 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
   }
 });
 
+router.post('/api/replace-monitor', authenticateUser, async (req, res) => {
+  const { fromMonitorId, toMonitorId, startDate, endDate } = req.body;
+  if (!fromMonitorId || !toMonitorId || !startDate || !endDate) {
+    return res.status(400).json({ error: 'Paramètres manquants' });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE slots SET monitor_id = $1 WHERE monitor_id = $2 AND start_time::date BETWEEN $3 AND $4`,
+      [toMonitorId, fromMonitorId, startDate, endDate]
+    );
+    res.json({ success: true, count: result.rowCount });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/api/slot-definitions', async (req, res) => {
   try {
     const { plan } = req.query;
