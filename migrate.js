@@ -192,6 +192,10 @@ const migrations = [
     sql: `ALTER TABLE slots ADD COLUMN IF NOT EXISTS second_booking JSONB DEFAULT NULL;`
   },
   {
+    name: '026_users_phone',
+    sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) DEFAULT NULL;`
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
