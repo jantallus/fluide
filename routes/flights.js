@@ -31,7 +31,7 @@ router.post('/api/flight-types', authenticateAdminOrPartner, validate(FlightType
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
   const flightSeason = season || 'Standard';
-  const flightTenant = tenant || (req.user.role === 'aravis' ? 'aravis' : 'fluide');
+  const flightTenant = req.user.enseigne || (req.user.role === 'aravis' ? 'aravis' : 'fluide');
 
   try {
     const r = await pool.query(
