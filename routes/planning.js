@@ -346,7 +346,7 @@ router.post('/api/delete-slots', authenticateAdminOrPartner, async (req, res) =>
 });
 
 router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) => {
-  const { startDate, endDate, daysToApply, plan_name, monitor_id, monitor_ids, blocked_pilot_ids, forceOverwrite } = req.body;
+  const { startDate, endDate, daysToApply, plan_name, monitor_id, monitor_ids, blocked_pilot_ids, forceOverwrite, ignoreUnavailability } = req.body;
   const plan = plan_name || 'Standard';
   const client = await pool.connect();
 
@@ -417,7 +417,7 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
 
             const monitorUnavails = availsByMonitor[m.id] || [];
-            const isUnavailable = !isPause && monitorUnavails.some(a => {
+            const isUnavailable = !isPause && !ignoreUnavailability && monitorUnavails.some(a => {
               const startD = new Date(a.start_date + 'T00:00:00');
               const endD = new Date(a.end_date + 'T00:00:00');
               return curr >= startD && curr <= endD;
