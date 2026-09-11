@@ -173,11 +173,6 @@ router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
     `;
     let params = [];
 
-    if (req.user.role === 'monitor') {
-      query += ` AND id = $1`;
-      params.push(req.user.id);
-    }
-
     query += ` ORDER BY CASE WHEN role = 'admin' THEN 1 WHEN role = 'permanent' THEN 2 WHEN role IN ('aravis', 'aravis_admin') THEN 3 ELSE 4 END, first_name ASC`;
     
     const r = await pool.query(query, params);
