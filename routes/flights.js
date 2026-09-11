@@ -26,7 +26,7 @@ router.get('/api/flight-types', async (req, res) => {
 });
 
 router.post('/api/flight-types', authenticateAdminOrPartner, validate(FlightTypeSchema), async (req, res) => {
-  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup, tenant } = req.body;
+  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup, media_included, tenant } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -35,16 +35,16 @@ router.post('/api/flight-types', authenticateAdminOrPartner, validate(FlightType
 
   try {
     const r = await pool.query(
-      `INSERT INTO flight_types (name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup, tenant)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING *`,
-      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, activity_gopro || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, flightTenant]
+      `INSERT INTO flight_types (name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup, media_included, tenant)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING *`,
+      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, activity_gopro || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, media_included || false, flightTenant]
     );
     res.json(r.rows[0]);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.put('/api/flight-types/:id', authenticateAdminOrPartner, validate(FlightTypeSchema), async (req, res) => {
-  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup } = req.body;
+  const { name, description, activity_ski, activity_snowboard, activity_pedestrian, activity_children, activity_gopro, duration_minutes, price_cents, restricted_start_time, restricted_end_time, color_code, allowed_time_slots, season, allow_multi_slots, weight_min, weight_max, booking_delay_hours, image_url, popup_content, show_popup, media_included } = req.body;
   const start = restricted_start_time === '' ? null : restricted_start_time;
   const end = restricted_end_time === '' ? null : restricted_end_time;
   const slots = allowed_time_slots ? JSON.stringify(allowed_time_slots) : '[]';
@@ -53,9 +53,9 @@ router.put('/api/flight-types/:id', authenticateAdminOrPartner, validate(FlightT
   try {
     await pool.query(
       `UPDATE flight_types
-       SET name = $1, description = $2, activity_ski = $3, activity_snowboard = $4, activity_pedestrian = $5, activity_children = $6, activity_gopro = $7, duration_minutes = $8, price_cents = $9, restricted_start_time = $10, restricted_end_time = $11, color_code = $12, allowed_time_slots = $13, season = $14, allow_multi_slots = $15, weight_min = $16, weight_max = $17, booking_delay_hours = $18, image_url = $19, popup_content = $20, show_popup = $21
+       SET name = $1, description = $2, activity_ski = $3, activity_snowboard = $4, activity_pedestrian = $5, activity_children = $6, activity_gopro = $7, duration_minutes = $8, price_cents = $9, restricted_start_time = $10, restricted_end_time = $11, color_code = $12, allowed_time_slots = $13, season = $14, allow_multi_slots = $15, weight_min = $16, weight_max = $17, booking_delay_hours = $18, image_url = $19, popup_content = $20, show_popup = $21, media_included = $23
        WHERE id = $22`,
-      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, activity_gopro || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id]
+      [name, description || null, activity_ski || false, activity_snowboard || false, activity_pedestrian || false, activity_children || false, activity_gopro || false, duration_minutes, price_cents, start, end, color_code, slots, flightSeason, allow_multi_slots || false, weight_min || 20, weight_max || 110, booking_delay_hours || 0, image_url || null, popup_content || null, show_popup || false, req.params.id, media_included || false]
     );
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

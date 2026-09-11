@@ -129,6 +129,7 @@ const FlightTypeSchema = z.object({
   image_url:              z.string().url().max(500).optional().nullable().or(z.literal('')),
   popup_content:          z.string().max(2000).optional().nullable(),
   show_popup:             z.boolean().optional().default(false),
+  media_included:         z.boolean().optional().default(false),
   tenant:                 z.enum(['fluide', 'aravis']).optional(),
 });
 
