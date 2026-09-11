@@ -455,15 +455,42 @@ router.post('/api/replace-monitor', authenticateUser, async (req, res) => {
   if (!fromMonitorId || !toMonitorId || !startDate || !endDate) {
     return res.status(400).json({ error: 'Paramètres manquants' });
   }
+  const client = await pool.connect();
   try {
-    const result = await pool.query(
-      `UPDATE slots SET monitor_id = $1 WHERE monitor_id = $2 AND start_time::date BETWEEN $3 AND $4`,
+    await client.query('BEGIN');
+
+    // Supprimer les créneaux non-réservés du remplaçant (libres, NON DISPO, pauses)
+    // pour libérer la place avant le transfert
+    await client.query(
+      `DELETE FROM slots
+       WHERE monitor_id = $1 AND start_time::date BETWEEN $2 AND $3
+         AND (status = 'available'
+              OR title LIKE '☕%'
+              OR UPPER(COALESCE(title,'')) LIKE '%NON DISPO%'
+              OR UPPER(COALESCE(title,'')) LIKE '%PAUSE%')`,
+      [toMonitorId, startDate, endDate]
+    );
+
+    // Transférer les créneaux du moniteur malade, en sautant les conflits
+    // (créneaux où le remplaçant a déjà une vraie réservation à cet horaire)
+    const result = await client.query(
+      `UPDATE slots SET monitor_id = $1
+       WHERE monitor_id = $2 AND start_time::date BETWEEN $3 AND $4
+         AND NOT EXISTS (
+           SELECT 1 FROM slots s2
+           WHERE s2.monitor_id = $1 AND s2.start_time = slots.start_time
+         )`,
       [toMonitorId, fromMonitorId, startDate, endDate]
     );
+
+    await client.query('COMMIT');
     res.json({ success: true, count: result.rowCount });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
