@@ -108,7 +108,7 @@ router.put('/api/users/:id/availabilities', authenticateUser, async (req, res) =
     for (const a of availabilities) {
       await client.query(
         'INSERT INTO monitor_availabilities (user_id, start_date, end_date, daily_start_time, daily_end_time) VALUES ($1, $2, $3, $4, $5)',
-        [req.params.id, a.start_date, a.end_date, a.daily_start_time, a.daily_end_time]
+        [req.params.id, a.start_date, a.end_date, a.daily_start_time || '00:00', a.daily_end_time || '23:59']
       );
     }
     await client.query('COMMIT');
