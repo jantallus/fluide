@@ -162,7 +162,7 @@ router.post('/api/pilots/bulk-add-availability', authenticateUser, async (req, r
 router.get('/api/monitors-admin', authenticateUser, async (req, res) => {
   try {
     let query = `
-      SELECT id, first_name, email, role, is_active_monitor, status,
+      SELECT id, first_name, email, phone, role, is_active_monitor, status,
              google_sync_enabled, receives_online_payments,
              commission_type, commission_value,
              TO_CHAR(available_start_date, 'YYYY-MM-DD') as available_start_date,
