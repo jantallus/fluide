@@ -490,7 +490,40 @@ router.post('/api/replace-monitor', authenticateUser, async (req, res) => {
       [toMonitorId, fromMonitorId, startDate, endDate]
     );
 
+    // Récupérer les slots booked+google_synced qui viennent d'être transférés
+    // (maintenant sur toMonitorId) pour supprimer leurs événements Google de l'ancien agenda
+    const transferredBookings = await client.query(
+      `SELECT start_time, end_time FROM slots
+       WHERE monitor_id = $1 AND start_time::date BETWEEN $2 AND $3
+         AND status = 'booked' AND payment_data->>'google_synced' = 'true'`,
+      [toMonitorId, startDate, endDate]
+    );
+
     await client.query('COMMIT');
+
+    // Nettoyage Google Agenda : supprimer les événements de l'ancien moniteur
+    // (sans bloquer la réponse en cas d'erreur)
+    if (transferredBookings.rows.length > 0) {
+      try {
+        const syncSetting = await pool.query("SELECT value FROM site_settings WHERE key = 'google_calendar_sync'");
+        if (syncSetting.rows.length > 0 && syncSetting.rows[0].value === 'true') {
+          const fromMonRes = await pool.query(
+            'SELECT first_name, google_sync_enabled FROM users WHERE id = $1',
+            [fromMonitorId]
+          );
+          if (fromMonRes.rows.length > 0 && fromMonRes.rows[0].google_sync_enabled) {
+            const fromName = fromMonRes.rows[0].first_name;
+            for (const slot of transferredBookings.rows) {
+              try {
+                await deleteGoogleCalendarEvent(fromName, slot.start_time, slot.end_time);
+              } catch (e) { console.error('Google delete event error:', e.message); }
+            }
+            invalidateCacheForMonitor(fromMonitorId);
+          }
+        }
+      } catch (e) { console.error('Google sync cleanup error:', e.message); }
+    }
+
     const skipped = totalToTransfer - result.rowCount;
     res.json({ success: true, count: result.rowCount, skipped });
   } catch (err) {
