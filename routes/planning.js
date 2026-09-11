@@ -122,7 +122,8 @@ router.get('/api/slots', authenticateUser, async (req, res) => {
 });
 
 router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
-  let { title, weight, flight_type_id, notes, status, monitor_id, phone, email, weightChecked, booking_options, client_message } = req.body;
+  let { title, weight, flight_type_id, notes, status, monitor_id, phone, email, weightChecked, booking_options, client_message, second_booking } = req.body;
+  const hasSecondBookingUpdate = 'second_booking' in req.body;
   const slotId = req.params.id;
 
   try {
@@ -157,14 +158,17 @@ router.patch('/api/slots/:id', authenticateUser, async (req, res) => {
       SET title = $1, weight = $2, flight_type_id = $3, notes = $4, status = $5,
           monitor_id = COALESCE($6, monitor_id), phone = $8, email = $9, weight_checked = $10,
           booking_options = $11, client_message = $12,
-          payment_data = COALESCE($13, payment_data)
+          payment_data = COALESCE($13, payment_data),
+          second_booking = CASE WHEN $14::boolean THEN $15::jsonb ELSE second_booking END
       WHERE id = $7 RETURNING *`,
       [
         title !== undefined ? title : null, weight ? parseInt(weight) : null, flight_type_id ? parseInt(flight_type_id) : null,
         notes !== undefined ? notes : null, status || 'available', monitor_id ? parseInt(monitor_id) : null, slotId,
         phone !== undefined ? phone : null, email !== undefined ? email : null, weightChecked !== undefined ? weightChecked : false,
         booking_options !== undefined ? booking_options : null, client_message !== undefined ? client_message : null,
-        req.body.payment_data !== undefined ? JSON.stringify(req.body.payment_data) : null
+        req.body.payment_data !== undefined ? JSON.stringify(req.body.payment_data) : null,
+        hasSecondBookingUpdate,
+        hasSecondBookingUpdate ? (second_booking !== null ? JSON.stringify(second_booking) : null) : null
       ]
     );
 
@@ -512,7 +516,7 @@ router.delete('/api/slots/:id', authenticateUser, async (req, res) => {
 
     // Le nettoyage du créneau
     await pool.query(
-      `UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL WHERE id = $1`, [req.params.id]
+      `UPDATE slots SET status = 'available', payment_data = NULL, title = NULL, notes = NULL, phone = NULL, email = NULL, booking_options = NULL, client_message = NULL, flight_type_id = NULL, weight_checked = false, weight = NULL, second_booking = NULL WHERE id = $1`, [req.params.id]
     );
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

@@ -184,6 +184,14 @@ const migrations = [
     `
   },
   {
+    name: '024_flight_types_media_included',
+    sql: `ALTER TABLE flight_types ADD COLUMN IF NOT EXISTS media_included BOOLEAN NOT NULL DEFAULT false;`
+  },
+  {
+    name: '025_slots_second_booking',
+    sql: `ALTER TABLE slots ADD COLUMN IF NOT EXISTS second_booking JSONB DEFAULT NULL;`
+  },
+  {
     name: '017_partners_table',
     sql: `
       CREATE TABLE IF NOT EXISTS partners (
