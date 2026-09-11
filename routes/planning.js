@@ -471,6 +471,13 @@ router.post('/api/replace-monitor', authenticateUser, async (req, res) => {
       [toMonitorId, startDate, endDate]
     );
 
+    // Compter les créneaux à transférer avant la mise à jour
+    const countBefore = await client.query(
+      `SELECT COUNT(*) FROM slots WHERE monitor_id = $1 AND start_time::date BETWEEN $2 AND $3`,
+      [fromMonitorId, startDate, endDate]
+    );
+    const totalToTransfer = parseInt(countBefore.rows[0].count);
+
     // Transférer les créneaux du moniteur malade, en sautant les conflits
     // (créneaux où le remplaçant a déjà une vraie réservation à cet horaire)
     const result = await client.query(
@@ -484,7 +491,8 @@ router.post('/api/replace-monitor', authenticateUser, async (req, res) => {
     );
 
     await client.query('COMMIT');
-    res.json({ success: true, count: result.rowCount });
+    const skipped = totalToTransfer - result.rowCount;
+    res.json({ success: true, count: result.rowCount, skipped });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err);
