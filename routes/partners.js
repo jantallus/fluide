@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { authenticateAdmin, authenticateAdminOrPartner } = require('../middleware/auth');
+const { authenticateAdmin, authenticateAdminOrPartner, authenticateUser } = require('../middleware/auth');
 
-router.get('/api/partners', authenticateAdminOrPartner, async (req, res) => {
+router.get('/api/partners', authenticateUser, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT p.*,
