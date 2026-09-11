@@ -593,8 +593,9 @@ router.get('/api/ical/:id', async (req, res) => {
 // /api/public/availabilities (périodes moniteur + Google Calendar sync).
 
 router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) => {
-  const { from, to } = req.query;
+  const { from, to, duration } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'Paramètres from et to requis (YYYY-MM-DD).' });
+  const flightDuration = duration ? parseInt(duration, 10) : null;
 
   try {
     const { rows: rawSlots } = await pool.query(
@@ -650,7 +651,23 @@ router.get('/api/public/aravis/slots', availabilitiesLimiter, async (req, res) =
       }
 
       if (!grouped[dateStr]) grouped[dateStr] = new Set();
-      grouped[dateStr].add(timeStr);
+
+      if (flightDuration && !isNaN(flightDuration)) {
+        const slotEnd = new Date(slot.end_time);
+        const slotDurationMin = (slotEnd - slotStart) / 60000;
+        if (flightDuration < slotDurationMin) {
+          // Subdivise le créneau en sous-créneaux de flightDuration minutes
+          let sub = new Date(slotStart);
+          while (sub.getTime() + flightDuration * 60000 <= slotEnd.getTime()) {
+            grouped[dateStr].add(sub.toISOString().slice(11, 16));
+            sub = new Date(sub.getTime() + flightDuration * 60000);
+          }
+        } else {
+          grouped[dateStr].add(timeStr);
+        }
+      } else {
+        grouped[dateStr].add(timeStr);
+      }
     }
 
     const result = {};
