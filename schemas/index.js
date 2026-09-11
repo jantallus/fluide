@@ -130,6 +130,7 @@ const FlightTypeSchema = z.object({
   popup_content:          z.string().max(2000).optional().nullable(),
   show_popup:             z.boolean().optional().default(false),
   media_included:         z.boolean().optional().default(false),
+  passengers_per_slot:    z.number().int().min(1).max(20).optional().default(1),
   tenant:                 z.enum(['fluide', 'aravis']).optional(),
 });
 
