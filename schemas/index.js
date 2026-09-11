@@ -72,6 +72,7 @@ const CheckoutGiftCardSchema = z.object({
 const CreateUserSchema = z.object({
   first_name:               zName,
   email:                    zEmail,
+  phone:                    z.string().max(30).optional().nullable(),
   password:                 z.string().min(8, 'Mot de passe trop court (8 caractères minimum)').max(200),
   role:                     z.enum(['admin', 'monitor', 'permanent', 'aravis']),
   enseigne:                 z.enum(['fluide', 'aravis']).optional().default('fluide'),
@@ -89,6 +90,7 @@ const CreateUserSchema = z.object({
 const UpdateUserSchema = z.object({
   first_name:               zName.optional(),
   email:                    zEmail.optional(),
+  phone:                    z.string().max(30).optional().nullable(),
   password:                 z.string().min(8).max(200).optional(),
   role:                     z.enum(['admin', 'monitor', 'permanent', 'aravis']).optional(),
   enseigne:                 z.enum(['fluide', 'aravis']).optional(),
