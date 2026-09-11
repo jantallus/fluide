@@ -124,32 +124,18 @@ router.post('/api/pilots/check-availability', authenticateUser, async (req, res)
     const pilotsRes = await pool.query(
       `SELECT id, first_name AS name FROM users WHERE is_active_monitor = true AND status = 'Actif' ORDER BY first_name ASC`
     );
-    const availsRes = await pool.query(
-      `SELECT user_id, TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date, TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date FROM monitor_availabilities`
+    // Indisponibilités chevauchant la période demandée
+    const unavailsRes = await pool.query(
+      `SELECT user_id FROM monitor_availabilities WHERE start_date <= $2 AND end_date >= $1`,
+      [startDate, endDate]
     );
+    const pilotsWithUnavail = new Set(unavailsRes.rows.map(r => String(r.user_id)));
 
-    const availsByPilot = {};
-    for (const a of availsRes.rows) {
-      if (!availsByPilot[a.user_id]) availsByPilot[a.user_id] = [];
-      availsByPilot[a.user_id].push({ start: a.start_date, end: a.end_date });
-    }
-
-    // Génère tous les jours YYYY-MM-DD de la plage demandée (comparaison string, sans timezone)
-    const days = [];
-    const curr = new Date(startDate + 'T12:00:00Z');
-    const last = new Date(endDate + 'T12:00:00Z');
-    while (curr <= last) {
-      days.push(curr.toISOString().split('T')[0]);
-      curr.setUTCDate(curr.getUTCDate() + 1);
-    }
-
-    const pilots = pilotsRes.rows.map(p => {
-      const avails = availsByPilot[p.id] || [];
-      if (avails.length === 0) return { id: String(p.id), name: p.name, available: true, hasRestrictions: false };
-      // Même logique que generate-slots : chaque jour doit être couvert par au moins une dispo
-      const allCovered = days.every(day => avails.some(a => a.start <= day && a.end >= day));
-      return { id: String(p.id), name: p.name, available: allCovered, hasRestrictions: true };
-    });
+    const pilots = pilotsRes.rows.map(p => ({
+      id: String(p.id),
+      name: p.name,
+      hasUnavailability: pilotsWithUnavail.has(String(p.id)),
+    }));
 
     res.json({ pilots });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Erreur serveur' }); }

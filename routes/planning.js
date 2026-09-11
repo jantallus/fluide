@@ -416,17 +416,14 @@ router.post('/api/generate-slots', authenticateAdminOrPartner, async (req, res) 
             const startTS = `${dateStr} ${d.start_time}`;
             const isPause = (d.label === 'PAUSE' || d.label === '☕ PAUSE');
 
-            const monitorAvails = availsByMonitor[m.id] || [];
-            const avails = { rows: monitorAvails };
-              const isAuthorized = avails.rows.some(a => {
-                const startD = new Date(a.start_date);
-                const endD = new Date(a.end_date);
-                return curr >= startD && curr <= endD && (!a.daily_start_time || d.start_time >= a.daily_start_time) && (!a.daily_end_time || d.start_time < a.daily_end_time);
-              });
+            const monitorUnavails = availsByMonitor[m.id] || [];
+            const isUnavailable = !isPause && monitorUnavails.some(a => {
+              const startD = new Date(a.start_date + 'T00:00:00');
+              const endD = new Date(a.end_date + 'T00:00:00');
+              return curr >= startD && curr <= endD;
+            });
 
-              if (avails.rows.length > 0 && !isAuthorized) continue;
-
-              const isBlocked = !isPause && blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id));
+              const isBlocked = !isPause && (isUnavailable || (blocked_pilot_ids && blocked_pilot_ids.includes(String(m.id))));
               const slotStatus = isPause || isBlocked ? 'booked' : 'available';
               const slotTitle = isPause ? '☕ PAUSE' : isBlocked ? 'NON DISPO' : null;
               placeholders.push(`($${paramIndex}, $${paramIndex+1}::timestamp, $${paramIndex+1}::timestamp + ($${paramIndex+2} || ' minutes')::interval, $${paramIndex+3}, $${paramIndex+4})`);
